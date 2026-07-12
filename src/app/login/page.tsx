@@ -2,11 +2,10 @@ import type { Metadata } from "next";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { OtpLoginForm } from "@/features/auth/OtpLoginForm";
+import { LoginForm } from "@/features/auth/LoginForm";
 
 export const dynamic = "force-dynamic";
 
@@ -36,14 +35,11 @@ export default function LoginPage({
         )}
 
         <Card>
-          <CardHeader className="space-y-1">
+          <CardHeader>
             <CardTitle className="text-lg">Sign in</CardTitle>
-            <CardDescription>
-              We will send a one-time PIN to your email.
-            </CardDescription>
           </CardHeader>
           <CardContent>
-            <OtpLoginForm />
+            <LoginForm />
           </CardContent>
         </Card>
 
