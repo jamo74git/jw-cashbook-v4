@@ -47,6 +47,32 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
+  // For protected routes, check profile status and date range
+  if (isProtected && user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("status, start_date, userend_date")
+      .eq("id", user.id)
+      .single();
+
+    const now = new Date().toISOString();
+    const isBlocked =
+      !profile ||
+      profile.status !== "active" ||
+      (profile.start_date && profile.start_date > now) ||
+      (profile.userend_date && profile.userend_date < now);
+
+    if (isBlocked) {
+      // Redirect to login with an error message
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set(
+        "error",
+        "Access is restricted to registered congregation members."
+      );
+      return NextResponse.redirect(loginUrl);
+    }
+  }
+
   // Skip login if already signed in
   if (pathname === "/login" && user) {
     return NextResponse.redirect(new URL("/treasurer", request.url));

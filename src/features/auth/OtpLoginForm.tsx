@@ -7,14 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type Step = "phone" | "otp";
+type Step = "email" | "otp";
 
 export function OtpLoginForm() {
   const router = useRouter();
   const supabase = createClient();
 
-  const [step, setStep] = useState<Step>("phone");
-  const [phone, setPhone] = useState("");
+  const [step, setStep] = useState<Step>("email");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export function OtpLoginForm() {
     setLoading(true);
 
     const { error } = await supabase.auth.signInWithOtp({
-      phone: phone.trim(),
+      email: email.trim(),
     });
 
     setLoading(false);
@@ -44,9 +44,9 @@ export function OtpLoginForm() {
     setLoading(true);
 
     const { error } = await supabase.auth.verifyOtp({
-      phone: phone.trim(),
+      email: email.trim(),
       token: otp.trim(),
-      type: "sms",
+      type: "email",
     });
 
     setLoading(false);
@@ -60,33 +60,33 @@ export function OtpLoginForm() {
     router.refresh();
   }
 
-  if (step === "phone") {
+  if (step === "email") {
     return (
       <form onSubmit={handleSendOtp} className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="phone">Phone number</Label>
+          <Label htmlFor="email">Email address</Label>
           <Input
-            id="phone"
-            type="tel"
-            placeholder="+27821234567"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            id="email"
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             required
-            autoComplete="tel"
-            aria-describedby={error ? "phone-error" : undefined}
+            autoComplete="email"
+            aria-describedby={error ? "email-error" : undefined}
           />
           <p className="text-xs text-muted-foreground">
-            International format, e.g. +27 82 123 4567
+            Enter the email address registered to your profile.
           </p>
         </div>
 
         {error && (
-          <p id="phone-error" role="alert" className="text-sm text-destructive">
+          <p id="email-error" role="alert" className="text-sm text-destructive">
             {error}
           </p>
         )}
 
-        <Button type="submit" className="w-full" disabled={loading || phone.trim().length < 8}>
+        <Button type="submit" className="w-full" disabled={loading || email.trim().length < 5}>
           {loading ? "Sending..." : "Send one-time PIN"}
         </Button>
       </form>
@@ -96,8 +96,8 @@ export function OtpLoginForm() {
   return (
     <form onSubmit={handleVerifyOtp} className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        A 6-digit PIN was sent to{" "}
-        <span className="font-medium text-foreground">{phone}</span>.
+        A 6-digit code was sent to{" "}
+        <span className="font-medium text-foreground">{email}</span>.
       </p>
 
       <div className="space-y-2">
@@ -131,9 +131,9 @@ export function OtpLoginForm() {
         type="button"
         variant="ghost"
         className="w-full"
-        onClick={() => { setStep("phone"); setOtp(""); setError(null); }}
+        onClick={() => { setStep("email"); setOtp(""); setError(null); }}
       >
-        Use a different number
+        Use a different email
       </Button>
     </form>
   );
