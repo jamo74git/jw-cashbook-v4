@@ -10,7 +10,7 @@ import { LoginForm } from "@/features/auth/LoginForm";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Sign in - JW Cashbook",
+  title: "Sign in - OAC Management System",
 };
 
 export default function LoginPage({
@@ -22,7 +22,7 @@ export default function LoginPage({
     <main className="min-h-screen flex items-center justify-center bg-muted/40 px-4 py-12">
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">JW Cashbook</h1>
+          <h1 className="text-2xl font-bold tracking-tight">OAC Management System</h1>
           <p className="text-sm text-muted-foreground">
             Sign in with your registered email address
           </p>

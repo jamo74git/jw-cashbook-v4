@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "JW Cashbook v4",
-  description: "Enterprise cashbook management for congregations",
+  title: "OAC Management System",
+  description: "Enterprise management system for OAC congregations",
 };
 
 export default function RootLayout({
