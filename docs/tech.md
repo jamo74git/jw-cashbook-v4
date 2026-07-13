@@ -39,6 +39,10 @@
 5.  HO/Overseer/Apostle: 
     can SELECT all tables using recursive hierarchy function
 
+## Special RLS Case: Cashbook Submission
+If a congregation has no user with role='Treasurer', the Chairperson for that congregation_id must be allowed to INSERT into cashbook_period and cashbook_line_item.
+Policy: `submitted_by IN (treasurer_id OR chairperson_id for congregation)`
+
 ## Performance
 Materialized view: mtd_totals_by_congregation
 Index: (congregation_id, year, month, week, service)

@@ -94,7 +94,7 @@ export default function CensusPage() {
 
     // Get user profile to find congregation and officer id
     const { data: profile } = await supabase
-      .from("user_profiles")
+      .from("profiles")
       .select("congregation_id, officer_id")
       .eq("id", user.id)
       .single();

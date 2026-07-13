@@ -33,21 +33,23 @@ export function LoginForm() {
       return;
     }
 
-    // Step 2: Check user profile status
-    const { data: profile } = await supabase
-      .from("user_profiles")
-      .select("status, role")
-      .eq("id", data.user.id)
-      .single();
+// Step 2: Check user profile status
+const { data: profile, error: profileError } = await supabase
+  .from("profiles")
+  .select("status, role")
+  .eq("id", data.user.id)
+  .single();
 
-    if (!profile || profile.status !== "approved") {
-      // Sign out and show error
-      await supabase.auth.signOut();
-      setLoading(false);
-      setError("Access is restricted to registered congregation members.");
-      return;
-    }
+console.log("PROFILE FROM DB:", profile);
+console.log("PROFILE ERROR:", profileError); // <-- add this
 
+if (!profile || profile.status !== "active") { // <-- changed from approved
+  // Sign out and show error
+  await supabase.auth.signOut();
+  setLoading(false);
+  setError("Access is restricted to registered congregation members.");
+  return;
+}
     // Step 3: Redirect based on role
     setLoading(false);
     router.push("/treasurer");

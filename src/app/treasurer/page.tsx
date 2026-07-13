@@ -12,7 +12,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Treasurer Dashboard - JW Cashbook",
+  title: "Treasurer Dashboard - OAC Cashbook",
 };
 
 export default async function TreasurerPage() {
