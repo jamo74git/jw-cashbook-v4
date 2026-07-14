@@ -1,0 +1,36 @@
+Kiro guided build:
+Read /docs/kiro_prompt_v6.txt and execute. DO NOT run migrations or npm install. Show me your plan first.
+
+
+Your plan looks good. 2 corrections before you write code:
+
+1. Secretary Rule: Secretary role must have View Totals Only for cashbook and census. 
+   Block access to proof images and line item details. Update permission_matrix_v3.txt.
+
+2. Chairperson Override: When Chair uses O override, log to audit_log table with 
+   action_type='SELF_REVIEW_EXCEPTION' and include assumed_role.
+
+After you make those 2 changes, proceed with Phase 1. 
+Show me the first 3 files: schema.sql, types.ts, permissions.ts before continuing to Phase 2.
+
+
+Phase 1 looks good. Proceed to Phase 2. 
+Important: When you build /dashboard and /capture, use hasPermission() and isTotalsOnly() 
+from permissions.ts for every button and query. Do not bypass the gate.
+Show me LoginForm.tsx and middleware.ts after you refactor them.
+
+Before phase 3
+Note for Phase 3: In /capture page, when Treasurer/Chair selects Congregation, 
+filter the dropdown using canAccessCongregation() from permissions.ts. 
+Scope must respect hierarchy.
+
+Phase 2 approved. Build passes. Proceed to Phase 3: Treasurer Capture Flow.
+
+Remember: 
+1. Use hasPermission() and isTotalsOnly() on every button in CashbookForm.tsx
+2. Photo upload required if IncomeType != Cash
+3. Balance check formula: Income = Banking + Expenses before Submit
+4. Sequential lock: checkWeekN-1Approved() before allowing capture
+
+Show me /app/capture/[service_id]/page.tsx and CashbookForm.tsx when done.
+

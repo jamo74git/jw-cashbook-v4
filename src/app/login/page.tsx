@@ -44,7 +44,7 @@ export default function LoginPage({
         </Card>
 
         <p className="text-center text-xs text-muted-foreground">
-          Access is restricted to registered congregation members.
+          Access is restricted to registered congregation committee members.
         </p>
       </div>
     </main>

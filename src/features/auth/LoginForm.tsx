@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { getDashboardRoute } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { Role } from "@/lib/types";
 
 export function LoginForm() {
   const router = useRouter();
@@ -21,38 +23,71 @@ export function LoginForm() {
     setError(null);
     setLoading(true);
 
-    // Step 1: Sign in with email + password
+    // Step 1: Authenticate with Supabase
     const { data, error: authError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
 
-    if (authError) {
+    if (authError || !data.user) {
       setLoading(false);
       setError("Invalid email or password");
       return;
     }
 
-// Step 2: Check user profile status
-const { data: profile, error: profileError } = await supabase
-  .from("profiles")
-  .select("status, role")
-  .eq("id", data.user.id)
-  .single();
+    // Step 2: Fetch user_hierarchy_access to determine role + scope
+    const { data: access, error: accessError } = await supabase
+      .from("user_hierarchy_access")
+      .select("id, role, hierarchy_id, congregation_id, scope_level, status, start_date, end_date")
+      .eq("user_id", data.user.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .single();
 
-console.log("PROFILE FROM DB:", profile);
-console.log("PROFILE ERROR:", profileError); // <-- add this
+    if (accessError || !access) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError("Access is restricted to registered congregation members.");
+      return;
+    }
 
-if (!profile || profile.status !== "active") { // <-- changed from approved
-  // Sign out and show error
-  await supabase.auth.signOut();
-  setLoading(false);
-  setError("Access is restricted to registered congregation members.");
-  return;
-}
-    // Step 3: Redirect based on role
+    // Step 3: Validate date range (start_date <= now <= end_date)
+    const now = new Date().toISOString();
+    if (access.start_date && access.start_date > now) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError("Your access has not yet started. Contact your administrator.");
+      return;
+    }
+    if (access.end_date && access.end_date < now) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError("Your access has expired. Contact your administrator.");
+      return;
+    }
+
+    // Step 4: For HO users, verify they have district assignments
+    if (access.role === "HO") {
+      const { data: districts } = await supabase
+        .from("ho_district_assignments")
+        .select("district_id")
+        .eq("user_id", data.user.id)
+        .limit(1);
+
+      if (!districts || districts.length === 0) {
+        await supabase.auth.signOut();
+        setLoading(false);
+        setError("No district assignment found. Contact Head Office.");
+        return;
+      }
+    }
+
+    // Step 5: Route to role-specific dashboard
+    const dashboardRoute = getDashboardRoute(access.role as Role);
+
     setLoading(false);
-    router.push("/treasurer");
+    router.push(dashboardRoute);
     router.refresh();
   }
 

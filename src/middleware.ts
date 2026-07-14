@@ -1,6 +1,27 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// ─── Route Protection Map ───────────────────────────────────────────────────
+// Maps route prefixes to the roles allowed to access them.
+// Empty array = any authenticated user with active access.
+// This is a first-pass gate; fine-grained permissions are checked in-page via permissions.ts.
+
+const ROUTE_ROLE_MAP: Record<string, string[]> = {
+  "/dashboard": [],                                          // All roles
+  "/capture": ["Treasurer", "Chairperson", "Elder"],         // Capture flow
+  "/audit": ["Auditor", "Chairperson", "Elder", "HO"],      // Audit queue
+  "/review": ["Overseer", "Apostle", "HO"],                  // Overseer/HO review
+  "/monthly-close": ["Elder", "Overseer", "HO"],             // Monthly close
+  "/census": ["Treasurer", "Elder", "Chairperson", "HO", "Apostle", "Overseer", "Secretary"],
+  "/admin": ["HO"],                                          // HO admin only
+  "/reports": [],                                            // All roles (export gated in-page)
+  "/messages": [],                                           // All except Secretary (gated in-page)
+  "/treasurer": ["Treasurer", "Chairperson", "Elder"],       // Legacy route redirect
+  "/oac": ["Treasurer", "Chairperson", "Elder"],             // Legacy cashbook
+};
+
+const PROTECTED_PREFIXES = Object.keys(ROUTE_ROLE_MAP);
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: { headers: request.headers },
@@ -39,43 +60,85 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Protect app routes
-  const protectedPrefixes = ["/treasurer", "/audit", "/capture", "/review", "/admin", "/submit"];
-  const isProtected = protectedPrefixes.some((p) => pathname.startsWith(p));
+  // ── Check if route is protected ──────────────────────────────────────────
+  const matchedPrefix = PROTECTED_PREFIXES.find((p) => pathname.startsWith(p));
+  const isProtected = !!matchedPrefix;
 
+  // ── Redirect unauthenticated users to login ──────────────────────────────
   if (isProtected && !user) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // For protected routes, check profile status and date range
+  // ── For authenticated users on protected routes: check user_hierarchy_access ──
   if (isProtected && user) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("status, start_date, userend_date")
-      .eq("id", user.id)
+    const { data: access } = await supabase
+      .from("user_hierarchy_access")
+      .select("role, status, start_date, end_date")
+      .eq("user_id", user.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .limit(1)
       .single();
 
-    const now = new Date().toISOString();
-    const isBlocked =
-      !profile ||
-      profile.status !== "active" ||
-      (profile.start_date && profile.start_date > now) ||
-      (profile.userend_date && profile.userend_date < now);
-
-    if (isBlocked) {
-      // Redirect to login with an error message
+    // No active access record → block
+    if (!access) {
       const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set(
-        "error",
-        "Access is restricted to registered congregation members."
-      );
+      loginUrl.searchParams.set("error", "Access is restricted to registered congregation members.");
       return NextResponse.redirect(loginUrl);
+    }
+
+    // Check date range
+    const now = new Date().toISOString();
+    if ((access.start_date && access.start_date > now) || (access.end_date && access.end_date < now)) {
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("error", "Your access period is not active. Contact your administrator.");
+      return NextResponse.redirect(loginUrl);
+    }
+
+    // Check role is allowed for this route
+    const allowedRoles = ROUTE_ROLE_MAP[matchedPrefix!];
+    if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(access.role)) {
+      // Redirect to their correct dashboard instead of showing an error
+      const roleRoutes: Record<string, string> = {
+        HO: "/admin",
+        Apostle: "/review",
+        Overseer: "/review",
+        Elder: "/dashboard",
+        Chairperson: "/capture",
+        Treasurer: "/capture",
+        Auditor: "/audit",
+        Secretary: "/reports",
+      };
+      const correctRoute = roleRoutes[access.role] ?? "/dashboard";
+      return NextResponse.redirect(new URL(correctRoute, request.url));
     }
   }
 
-  // Skip login if already signed in
+  // ── Redirect authenticated users away from login to their dashboard ──────
   if (pathname === "/login" && user) {
-    return NextResponse.redirect(new URL("/treasurer", request.url));
+    const { data: access } = await supabase
+      .from("user_hierarchy_access")
+      .select("role")
+      .eq("user_id", user.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .single();
+
+    if (access) {
+      const roleRoutes: Record<string, string> = {
+        HO: "/admin",
+        Apostle: "/review",
+        Overseer: "/review",
+        Elder: "/dashboard",
+        Chairperson: "/capture",
+        Treasurer: "/capture",
+        Auditor: "/audit",
+        Secretary: "/reports",
+      };
+      const route = roleRoutes[access.role] ?? "/dashboard";
+      return NextResponse.redirect(new URL(route, request.url));
+    }
   }
 
   return response;

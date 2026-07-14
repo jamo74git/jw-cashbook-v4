@@ -1,13 +1,84 @@
--- Seed data: 1 test user per role (all active)
--- These UUIDs are deterministic for easy reference in development.
--- In production, users are created via Supabase Auth and the trigger auto-creates profiles.
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- OAC MANAGEMENT SYSTEM — SEED DATA
+-- Congregations: Bosmont (020700), Newclare (026040)
+-- Full hierarchy + users for every role + HO district assignment
+-- ═══════════════════════════════════════════════════════════════════════════════
 
-INSERT INTO public.profiles (id, email, role, status, start_date, userend_date) VALUES
-  ('00000000-0000-0000-0000-000000000001', 'ho@jwcashbook.test', 'HO', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000002', 'apostle@jwcashbook.test', 'Apostle', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000003', 'overseer@jwcashbook.test', 'Overseer', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000004', 'elder@jwcashbook.test', 'Elder', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000005', 'chairperson@jwcashbook.test', 'Chairperson', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000006', 'treasurer@jwcashbook.test', 'Treasurer', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000007', 'auditor@jwcashbook.test', 'Auditor', 'active', '2024-01-01', NULL),
-  ('00000000-0000-0000-0000-000000000008', 'secretary@jwcashbook.test', 'Secretary', 'active', '2024-01-01', NULL);
+-- ─── HIERARCHY ──────────────────────────────────────────────────────────────
+
+INSERT INTO public.hierarchy_levels (id, level_type, name, code, parent_id) VALUES
+  ('10000000-0000-0000-0000-000000000001', 'Conference', 'Conference of Apostles', 'CONF01', NULL),
+  ('10000000-0000-0000-0000-000000000002', 'Apostolate', 'Apostolate of Africa and the Middle East', 'APO01', '10000000-0000-0000-0000-000000000001'),
+  ('10000000-0000-0000-0000-000000000003', 'District', 'Gauteng District', 'DIST01', '10000000-0000-0000-0000-000000000002'),
+  ('10000000-0000-0000-0000-000000000004', 'Apostleship', 'Apostleship Johannesburg West', 'APOS01', '10000000-0000-0000-0000-000000000003'),
+  ('10000000-0000-0000-0000-000000000005', 'Overseership', 'Overseership Westrand', 'OVER01', '10000000-0000-0000-0000-000000000004'),
+  ('10000000-0000-0000-0000-000000000006', 'Eldership', 'Eldership Bosmont-Newclare', 'ELDER01', '10000000-0000-0000-0000-000000000005'),
+  ('10000000-0000-0000-0000-000000000007', 'Congregation', 'Bosmont', '020700', '10000000-0000-0000-0000-000000000006'),
+  ('10000000-0000-0000-0000-000000000008', 'Congregation', 'Newclare', '026040', '10000000-0000-0000-0000-000000000006');
+
+-- ─── CONGREGATIONS ──────────────────────────────────────────────────────────
+
+INSERT INTO public.congregations (id, hierarchy_id, name, code, eldership_id, overseership_id, apostleship_id, district_id) VALUES
+  ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000007', 'Bosmont', '020700',
+   '10000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000003'),
+  ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000008', 'Newclare', '026040',
+   '10000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000003');
+
+-- ─── OFFICERS (Bosmont) ─────────────────────────────────────────────────────
+
+INSERT INTO public.officers (id, congregation_id, officer_code, first_name, last_name, rank, is_active) VALUES
+  ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'Priestship-001', 'John', 'Molefe', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'Priestship-002', 'David', 'Khumalo', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'Priestship-003', 'Peter', 'Nkosi', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000001', 'Priestship-004', 'James', 'Sithole', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000001', 'Priestship-005', 'Simon', 'Dlamini', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', 'Priestship-006', 'Andrew', 'Mabena', 'Priest', true);
+
+-- ─── OFFICERS (Newclare) ────────────────────────────────────────────────────
+
+INSERT INTO public.officers (id, congregation_id, officer_code, first_name, last_name, rank, is_active) VALUES
+  ('30000000-0000-0000-0000-000000000011', '20000000-0000-0000-0000-000000000002', 'Priestship-001', 'Thomas', 'Mahlangu', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000012', '20000000-0000-0000-0000-000000000002', 'Priestship-002', 'Matthew', 'Zwane', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000013', '20000000-0000-0000-0000-000000000002', 'Priestship-003', 'Paul', 'Ndlovu', 'Priest', true),
+  ('30000000-0000-0000-0000-000000000014', '20000000-0000-0000-0000-000000000002', 'Priestship-004', 'Mark', 'Mokoena', 'Priest', true);
+
+-- ─── TEST USERS (auth.users must exist first — these map to user_hierarchy_access) ──
+
+-- User UUIDs (deterministic for testing)
+-- HO Admin:      40000000-0000-0000-0000-000000000001
+-- Apostle:       40000000-0000-0000-0000-000000000002
+-- Overseer:      40000000-0000-0000-0000-000000000003
+-- Elder:         40000000-0000-0000-0000-000000000004
+-- Chair Bosmont: 40000000-0000-0000-0000-000000000005
+-- Treasurer Bos: 40000000-0000-0000-0000-000000000006
+-- Auditor 1 Bos: 40000000-0000-0000-0000-000000000007
+-- Auditor 2 Bos: 40000000-0000-0000-0000-000000000008
+-- Secretary Bos: 40000000-0000-0000-0000-000000000009
+-- Treasurer New: 40000000-0000-0000-0000-000000000010
+
+INSERT INTO public.user_hierarchy_access (id, user_id, role, hierarchy_id, congregation_id, scope_level, status) VALUES
+  ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'HO', '10000000-0000-0000-0000-000000000003', NULL, 'District', 'active'),
+  ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000002', 'Apostle', '10000000-0000-0000-0000-000000000004', NULL, 'Apostleship', 'active'),
+  ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 'Overseer', '10000000-0000-0000-0000-000000000005', NULL, 'Overseership', 'active'),
+  ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000004', 'Elder', '10000000-0000-0000-0000-000000000006', NULL, 'Eldership', 'active'),
+  ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000005', 'Chairperson', '10000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001', 'Congregation', 'active'),
+  ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000006', 'Treasurer', '10000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001', 'Congregation', 'active'),
+  ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000007', 'Auditor', '10000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001', 'Congregation', 'active'),
+  ('50000000-0000-0000-0000-000000000008', '40000000-0000-0000-0000-000000000008', 'Auditor', '10000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001', 'Congregation', 'active'),
+  ('50000000-0000-0000-0000-000000000009', '40000000-0000-0000-0000-000000000009', 'Secretary', '10000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001', 'Congregation', 'active'),
+  ('50000000-0000-0000-0000-000000000010', '40000000-0000-0000-0000-000000000010', 'Treasurer', '10000000-0000-0000-0000-000000000008', '20000000-0000-0000-0000-000000000002', 'Congregation', 'active');
+
+-- ─── HO DISTRICT ASSIGNMENT ─────────────────────────────────────────────────
+
+INSERT INTO public.ho_district_assignments (id, user_id, district_id, assigned_by) VALUES
+  ('60000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001');
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- TEST SCENARIO NOTES:
+-- 1. HO (40..001) can bulk create a 3rd congregation under Gauteng District
+-- 2. Treasurer Bosmont (40..006) captures AM + PM services
+-- 3. Auditor 1 (40..007) + Auditor 2 (40..008) approve
+-- 4. Elder (40..004) submits month to Overseer
+-- 5. Overseer (40..003) approves → submitted to HO
+-- 6. Secretary (40..009) can only see totals, no proof images, no census detail
+-- ═══════════════════════════════════════════════════════════════════════════════

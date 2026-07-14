@@ -38,7 +38,7 @@ Correction Status	V	-	-	V	V	V	V	-
 
 4. Module 2A – Member Tithing Capture
 Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
-View Capture	V	V	V	V	V	V	V	Limited Totals
+View Capture	V	V	V	V	V	V	V	Totals Only
 Capture Week	-	-	-	O	C	-	C	-
 Edit Draft Week	-	-	-	O	E	-	E	-
 Reopen Soft Locked Week	-	-	-	O	O	-	-	-
@@ -54,7 +54,7 @@ View Officer Trends	V	V	V	V	V	-	-	-
 
 6. Module 3 – Banking & Proof Management
 Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
-View Banking	V	V	V	V	V	V	V
+View Banking	V	V	V	V	V	V	V	Totals Only
 Add Banking Line	-	-	-	O	C	-	C	-
 Edit Banking Line	-	-	-	O	E	-	E	-
 Upload Proof	-	-	-	O	C	-	C	-
@@ -88,7 +88,8 @@ Approve Week	-	-	-	O	Exception	A	-	-
 Reject Week	-	-	-	O	Exception	A	-	-
 Mandatory Reject Comment	Yes	Yes	Yes	Yes	Yes	Yes	-	-
 View Audit History	V	V	V	V	V	V	-
-Note: Chairperson approval generates SELF_REVIEW_EXCEPTION audit log
+Note: Chairperson approval generates SELF_REVIEW_EXCEPTION audit log.
+      When Chair uses O override, insert into audit_log with action_type='SELF_REVIEW_EXCEPTION' and assumed_role field.
 
 10. Module 7 – Monthly Close
 Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
@@ -144,7 +145,7 @@ Leadership Assignments: HO=M
 
 16. Module 12 – CENSUS / PRIESTSHIP HEALTH - NEW
 Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
-View Census	Rollup	Rollup	Rollup	Cong	Cong	-	Cong	-
+View Census	Rollup	Rollup	Rollup	Cong	Cong	-	Cong	Totals Only
 Capture Census	-	-	-	C	-	-	C	-
 Edit Census	-	-	-	E	-	-	E	-
 View 90 Day Flag	-	V	V	V	-	-	V	-
