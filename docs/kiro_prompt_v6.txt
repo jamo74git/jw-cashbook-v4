@@ -1,0 +1,58 @@
+TASK: REFACTOR Cashbook = Congregational Management App
+DO NOT SCAFFOLD NEW. Refactor existing Next.js + Supabase app in /app and /lib.
+
+SOURCE OF TRUTH - READ ALL FIRST:
+1.  /docs/design/hierarchy.png        
+2.  /docs/design/process_flow.png     
+3.  /docs/requirements/steering.txt   
+4.  /docs/requirements/permission_matrix_v3.txt <- UPDATED
+5.  /docs/design/app_ui_presentation.pptx
+
+CORE RULES:
+HIERARCHY: Conference > Apostolate > District > Apostleship > Overseership > Eldership > Congregation
+HO USERS: Must have ho_district_assignments. Can only see assigned Districts. RLS by hierarchy_code.
+
+NON-NEGOTIABLE MODULES:
+
+1. AUTH + DASHBOARD ROUTING
+   Login checks user_hierarchy_access. Route to role dashboard per scope.
+
+2. TREASURER CAPTURE FLOW - SERVICE LEVEL
+   Step 1: Select Congregation + ServiceDate + ServiceType[AM,PM]
+   Step 2: Capture Member Tithing per Priestship.officer_code. Fields: Amount, IncomeType[Cash,EFT,DD]
+           Rule: If IncomeType != Cash then photo_upload REQUIRED.
+   Step 3: Capture Officer Tithing per individual officer_code.
+   Step 4: Balance check: income must = banking + expenses. Then SUBMIT SERVICE FOR AUDIT. Status=PENDING_AUDIT
+
+3. AUDIT WORKFLOW - CONGREGATIONAL LEVEL ONLY
+   a. 2x AUDITORS assigned per Congregation. Review PENDING_AUDIT. Actions: AUDIT_APPROVE or AUDIT_REJECT + comment.
+   b. CHAIRPERSON can ASSUME Treasurer or Auditor role with O override. All assumption actions audited as SELF_REVIEW_EXCEPTION.
+   c. When ALL services in a month are AUDIT_APPROVED, ELDER can SUBMIT MONTH TO OVERSEER.
+   d. OVERSEER reviews and OverseerReviewApprove or OverseerReviewReject + comment.
+   e. If OVERSEER_APPROVE -> OVERSEER SUBMITTED_TO_HO. 
+   f. If REJECTED at any stage -> Status=DRAFT. Congregational Management Committee[Treasurer, 2xAuditors, Chair] resolves.
+
+4. CENSUS MODULE - PRIESTSHIP HEALTH
+   Captured by: TREASURER or ELDER per Congregation
+   Per Priest: eligible_to_tithe, children, youth, adults, seniors, total_members, last_updated_date
+   FLAGS: 90 days no update = ORANGE. 180 days = RED on Priest dashboard.
+   VISIBILITY: Chair/Elder=Cong Total. Overseer/Apostle=Overseership Total. HO=Conference Total.
+   SECRETARY = NO ACCESS TO CENSUS.
+
+5. BULK ADMIN FOR HO
+   CSV Import for: Congregations, Officers with roles, Users + assign to hierarchy + role in user_hierarchy_access.
+   Respect ho_district_assignments. Validate + Audit log all bulk actions.
+
+6. REPORTS + API FOUNDATION
+   Create Supabase VIEWS: v_cashbook_service, v_cashbook_month, v_census_health
+   RLS on all views. No direct table access. For future SharePoint API.
+
+7. PERMISSIONS
+   Gate every page, button, API using permission_matrix_v3.txt. No hardcoded roles.
+
+8. DEVICE RULES
+   HO, APOSTLE, OVERSEER: PC/Laptop + Mobile.
+   TREASURER, CHAIR, ELDER, SECRETARY, AUDITOR: Mobile-first.
+
+SEED DATA: Bosmont 020700, Newclare 026040
+TEST: HO can bulk create 3rd congregation. Treasurer captures AM+PM. 2x Auditors approve. Elder->Overseer->HO

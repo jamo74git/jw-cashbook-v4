@@ -1,0 +1,163 @@
+Church Financial Management System
+Detailed Permission Matrix v3 (Baseline for Supabase RLS, Navigation & Security)
+Aligned to process_flow.png 2026-04-19
+
+1. Permission Legend
+Code	Meaning
+V	View
+C	Create / Capture
+E	Edit
+A	Approve
+S	Submit
+X	Export
+M	Manage
+O	Override / Assume Role - Fully Audited
+R	Reply
+-	No Access
+
+2. Scope Hierarchy
+Role	Scope
+Head Office Admin	Assigned District(s) only via ho_district_assignments
+Apostle	Assigned Apostleship only
+Overseer	Assigned Overseership only
+Elder	Assigned Eldership only
+Chairperson	Assigned Congregation only
+Auditor	Assigned Congregation only
+Treasurer	Assigned Congregation only
+Secretary	Assigned Congregation reports only
+
+3. Module 1 – Dashboard
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+Dashboard Home	V	V	V	V	V
+KPI Widgets	V	V	V	V	V	V
+Exception Widgets	V	V	V	V	Limited	Limited	Limited	-
+Outstanding Audits	V	V	V	V	V	V	Limited	-
+Banking Exceptions	V	V	V	V	V	V	V	-
+Expense Exceptions	V	V	V	V	V	V	V	V
+Correction Status	V	-	-	V	V	V	V	-
+
+4. Module 2A – Member Tithing Capture
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Capture	V	V	V	V	V	V	V	Limited Totals
+Capture Week	-	-	-	O	C	-	C	-
+Edit Draft Week	-	-	-	O	E	-	E	-
+Reopen Soft Locked Week	-	-	-	O	O	-	-	-
+Submit For Audit	-	-	-	O	S	-	S	-
+
+5. Module 2B – Officer Tithing Capture
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Officer Capture	V	V	V	V	V	V	V	V
+Capture Officer Tithing	-	-	-	O	C	-	C	-
+Edit Officer Tithing	-	-	-	O	E	-	E	-
+View Officer Transfers	V	V	V	V	V	-	-	-
+View Officer Trends	V	V	V	V	V	-	-	-
+
+6. Module 3 – Banking & Proof Management
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Banking	V	V	V	V	V	V	V
+Add Banking Line	-	-	-	O	C	-	C	-
+Edit Banking Line	-	-	-	O	E	-	E	-
+Upload Proof	-	-	-	O	C	-	C	-
+View Proof Images	V	V	V	V	V	V	V	-
+View Deposit Exceptions	V	V	V	V	V	V	V	-
+Export Banking Report	X	X	X	V	-	-	V
+
+7. Module 4 – Expense Management
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Expenses	V	V	V	V	V	V	V
+Capture Expense	-	-	-	O	C	-	C	-
+Edit Expense	-	-	-	O	E	-	E	-
+Upload Receipt	-	-	-	O	C	-	C	-
+Approve Expenses > R500	-	-	-	A	-	-	-	-
+Reject Expense	-	-	-	A	-	-	-	-
+Export Expense Report	X	X	X	X	V	-	-	V
+
+8. Module 5 – Weekly Reconciliation
+Critical Rule: Income = Banking + Expenses
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Weekly Reconciliation	V	V	V	V	V	V	V
+Trigger Recalculation	-	-	-	O	-	-	-	-
+Approve Balanced Week	-	-	-	O	Exception	A	-	-
+Approve Unbalanced Week	-	-	-	-	-	-	-	-
+View Variance Detail	V	V	V	V	V	-
+
+9. Module 6 – Audit Review
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Audit Queue	V	V	V	V	V	V	-	-
+Approve Week	-	-	-	O	Exception	A	-	-
+Reject Week	-	-	-	O	Exception	A	-	-
+Mandatory Reject Comment	Yes	Yes	Yes	Yes	Yes	Yes	-	-
+View Audit History	V	V	V	V	V	V	-
+Note: Chairperson approval generates SELF_REVIEW_EXCEPTION audit log
+
+10. Module 7 – Monthly Close
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Month Close	V	V	V	V	V	V	V	V
+View Month Reconciliation	V	V	V	V	V	V	V	V
+Submit Month To Overseer	-	-	-	S	-	-	-	-
+Overseer Review Approve	-	-	A	-	-	-	-	-
+Overseer Review Reject	-	-	A	-	-	-	-	-
+Submit Month To HO	-	-	S	-	-	-	-	-
+Create Snapshot	System	System	System	Trigger	-	-	-	-
+Reopen Month	-	-	-	O	-	-	-	-
+
+11. Module 8 – Corrections & Exceptions
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+Raise Correction Request	A	-	-	-	-	-	-	-
+Unlock Month	A	-	-	-	-	-	-	-
+View Correction Request	V	-	-	V	V	V	V	-
+Correct Submission	-	-	-	O	E	-	E	-
+Re-Submit Month	-	-	-	S	-	-	-	-
+View Correction History	V	-	-	V	V	V	V	-
+
+12. Module 9A – Head Office ↔ Congregation Messaging
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Messages	V	Read Only	Read Only	V	V	V	V	-
+Send Message	C	-	-	R	R	R	R	-
+Reply To Message	C	-	-	R	R	R	R	-
+Attach Document	C	-	-	R	R	R	R	-
+
+13. Module 9B – Internal Congregation Messaging
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Messages	-	Optional	Optional	V	V	V	V	-
+Send Message	-	Optional	Optional	C	C	C	C	-
+Reply	-	Optional	Optional	R	R	R	R	-
+
+14. Module 10 – Reporting & Analytics
+Dashboard	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+District Dashboard	V	-	-	-	-	-	-	-
+Apostleship Dashboard	V	V	Read Only	-	-	-	-	-
+Overseership Dashboard	V	V	Read Only	-	-	-	-
+Eldership Dashboard	V	V	-	-	-	-
+Congregation Dashboard	V	V	V	V	V	V	V	V
+Priestship Dashboard	V	V	V	V	Limited	Limited	-
+Export PDF	X	X	X	X	X	-	-	X
+Export Excel	X	X	X	X	Limited	-	-	-
+Export CSV	X	X	X	X	Limited	-	-	-
+Secretary Rule: PDF only. No Excel, No CSV
+
+15. Module 11 – Master Data Management
+Congregations: HO=M
+Users: HO=M
+Officers: HO=M
+Leadership Assignments: HO=M
+
+16. Module 12 – CENSUS / PRIESTSHIP HEALTH - NEW
+Function	HO	Apostle	Overseer	Elder	Chairperson	Auditor	Treasurer	Secretary
+View Census	Rollup	Rollup	Rollup	Cong	Cong	-	Cong	-
+Capture Census	-	-	-	C	-	-	C	-
+Edit Census	-	-	-	E	-	-	E	-
+View 90 Day Flag	-	V	V	V	-	-	V	-
+View 180 Day Flag	-	V	-	-	V	-
+
+17. Administration Functions
+Function	HO
+Audit Logs	M
+Import History	M
+Export History	M
+SharePoint Publishing	M
+Reference Data	M
+District Access Assignment	M
+
+18. Security Requirement: District Segregation
+HO Users Must Be Assigned District Access via ho_district_assignments table
