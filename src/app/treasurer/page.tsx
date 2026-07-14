@@ -33,7 +33,7 @@ export default async function TreasurerPage() {
           <CardHeader>
             <CardTitle>Treasurer Dashboard</CardTitle>
             <CardDescription>
-              Welcome to JW Cashbook v4. Capture and manage your
+              Welcome to OAC Management System. Capture and manage your
               congregation weekly cashbook entries below.
             </CardDescription>
           </CardHeader>
@@ -44,6 +44,50 @@ export default async function TreasurerPage() {
             </p>
           </CardContent>
         </Card>
+
+        {/* Quick Action Cards — 2-column grid on desktop */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Capture Service</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Start a new AM or PM service capture for your congregation.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Census</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Update priest census demographics for the current month.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Outstanding Audits</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Services pending audit review for your congregation.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Monthly Close</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                View monthly approval status and submit to Overseer.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </main>
   );
