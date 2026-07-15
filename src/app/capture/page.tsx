@@ -12,12 +12,11 @@ interface Congregation {
   code: string;
 }
 
-export default function AuditDashboard() {
+export default function CaptureDashboard() {
   const supabase = createClient();
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [email, setEmail] = useState<string>("");
   const [congregation, setCongregation] = useState<Congregation | null>(null);
-  const [pendingCount, setPendingCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const role = access?.role as Role | undefined;
@@ -31,7 +30,7 @@ export default function AuditDashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       setEmail(user?.email ?? "");
 
-      // Fetch congregation
+      // Fetch congregation for Treasurer/Chairperson (congregation_id is set)
       if (userAccess.congregation_id) {
         const { data: cong } = await supabase
           .from("congregations")
@@ -39,14 +38,6 @@ export default function AuditDashboard() {
           .eq("id", userAccess.congregation_id)
           .single();
         if (cong) setCongregation(cong);
-
-        // Count pending audit items
-        const { count } = await supabase
-          .from("cashbook_service")
-          .select("id", { count: "exact", head: true })
-          .eq("congregation_id", userAccess.congregation_id)
-          .eq("status", "PendingAudit");
-        setPendingCount(count ?? 0);
       }
       setLoading(false);
     })();
@@ -57,15 +48,15 @@ export default function AuditDashboard() {
     return <main className="min-h-screen bg-muted/40 px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-muted-foreground">Loading...</p></div></main>;
   }
 
-  if (!role || !hasPermission(role, "audit.view_queue")) {
-    return <main className="min-h-screen bg-muted/40 px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-destructive">Access denied. Auditor role required.</p></div></main>;
+  if (!role || !hasPermission(role, "capture.create")) {
+    return <main className="min-h-screen bg-muted/40 px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-destructive">Access denied. Treasurer or Chairperson role required.</p></div></main>;
   }
 
   return (
     <main className="min-h-screen bg-muted/40 px-4 py-6">
       <div className="mx-auto max-w-4xl space-y-6">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">Auditor Dashboard</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Capture Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             Role: <span className="font-medium">{role}</span> · {email}
           </p>
@@ -76,31 +67,35 @@ export default function AuditDashboard() {
           )}
         </div>
 
-        {/* Pending Audit Banner */}
-        <Card className={pendingCount > 0 ? "border-orange-300" : ""}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Pending Audit Queue</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{pendingCount}</p>
-            <p className="text-sm text-muted-foreground">
-              {pendingCount === 0 ? "No services waiting for review." : "service(s) waiting for your review."}
-            </p>
-          </CardContent>
-        </Card>
-
+        {/* Single Congregation — Direct Action Cards */}
         <div className="grid gap-4 sm:grid-cols-2">
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Review Queue</CardTitle></CardHeader>
-            <CardContent><CardDescription>View submitted services, proof images, and banking reconciliation.</CardDescription></CardContent>
+            <CardHeader className="pb-2"><CardTitle className="text-base">New Service Capture</CardTitle></CardHeader>
+            <CardContent>
+              <CardDescription>Start capturing AM or PM service for the current week.</CardDescription>
+            </CardContent>
           </Card>
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Audit History</CardTitle></CardHeader>
-            <CardContent><CardDescription>Previously approved and rejected services.</CardDescription></CardContent>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Draft Services</CardTitle></CardHeader>
+            <CardContent>
+              <CardDescription>Continue editing services saved as Draft.</CardDescription>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Pending Audit</CardTitle></CardHeader>
+            <CardContent>
+              <CardDescription>Services you submitted that are awaiting auditor review.</CardDescription>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Census</CardTitle></CardHeader>
+            <CardContent>
+              <CardDescription>Update priest census demographics for this month.</CardDescription>
+            </CardContent>
           </Card>
         </div>
 
-        <p className="text-xs text-muted-foreground text-center">Coming Soon — Full audit queue and history</p>
+        <p className="text-xs text-muted-foreground text-center">Coming Soon — Service selection and capture flow</p>
       </div>
     </main>
   );

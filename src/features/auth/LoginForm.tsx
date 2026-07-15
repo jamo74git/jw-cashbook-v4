@@ -35,22 +35,21 @@ export function LoginForm() {
       return;
     }
 
-    // Step 2: Fetch user_hierarchy_access to determine role + scope
-    const { data: access, error: accessError } = await supabase
-      .from("user_hierarchy_access")
-      .select("id, role, hierarchy_id, congregation_id, scope_level, status, start_date, end_date")
-      .eq("user_id", data.user.id)
-      .eq("status", "active")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .single();
+   const { data: access, error: accessError } = await supabase
+  .from("user_hierarchy_access")
+  .select("id, role, hierarchy_id, congregation_id, scope_level, status, start_date, end_date")
+  .eq("user_id", data.user.id)
+  .eq("status", "active")
+  .limit(1)
+  .maybeSingle(); // <-- CHANGED
+  console.log("ACCESS QUERY:", { access, accessError, userId: data.user.id }); // ADD THIS
 
-    if (accessError || !access) {
-      await supabase.auth.signOut();
-      setLoading(false);
-      setError("Access is restricted to registered congregation members.");
-      return;
-    }
+if (accessError || !access) {
+  await supabase.auth.signOut();
+  setLoading(false);
+  setError("Access is restricted to registered congregation members.");
+  return;
+}
 
     // Step 3: Validate date range (start_date <= now <= end_date)
     const now = new Date().toISOString();
@@ -84,6 +83,7 @@ export function LoginForm() {
     }
 
     // Step 5: Route to role-specific dashboard
+// Step 5: Route to role-specific dashboard
     const dashboardRoute = getDashboardRoute(access.role as Role);
 
     setLoading(false);

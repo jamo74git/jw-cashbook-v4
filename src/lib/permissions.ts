@@ -99,14 +99,13 @@ export async function getUserAccess(): Promise<UserHierarchyAccess | null> {
 
   if (!user) return null;
 
-  const { data } = await supabase
-    .from("user_hierarchy_access")
-    .select("*")
-    .eq("user_id", user.id)
-    .eq("status", "active")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .single();
+const { data } = await supabase
+  .from("user_hierarchy_access")
+  .select("*")
+  .eq("user_id", user.id)
+  .eq("status", "active")
+  .limit(1)
+  .maybeSingle(); // no order
 
   return data ?? null;
 }
