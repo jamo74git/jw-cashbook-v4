@@ -32,6 +32,10 @@ function needsProof(item: LineItem): boolean {
   return ["EFT", "DirectDeposit", "Burial", "Expense"].includes(item.item_type);
 }
 
+function officerLabel(o: Officer): string {
+  return `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}`;
+}
+
 export default function CapturePage() {
   const supabase = createClient();
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
@@ -45,15 +49,17 @@ export default function CapturePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("Members");
+  const [selectedService, setSelectedService] = useState<"AM" | "PM">("AM");
 
   // Capture bar state
   const [capOfficerId, setCapOfficerId] = useState("");
   const [capType, setCapType] = useState("Cash");
   const [capAmount, setCapAmount] = useState("");
   const [capRef, setCapRef] = useState("");
+  const [capError, setCapError] = useState("");
   const [activeOfficerId, setActiveOfficerId] = useState<string | null>(null);
 
-  // Proof modal state
+  // Proof modal
   const [proofModal, setProofModal] = useState<{ itemId: string; type: string } | null>(null);
   const [proofDate, setProofDate] = useState("");
   const [proofBankRef, setProofBankRef] = useState("");
@@ -67,20 +73,23 @@ export default function CapturePage() {
   useEffect(() => { const c = () => setIsMobile(window.innerWidth < 768); c(); window.addEventListener("resize", c); return () => window.removeEventListener("resize", c); }, []);
 
   // ── Load ──────────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
+  const load = useCallback(async (svc?: string) => {
     setLoading(true); setError(null);
     const ua = await getUserAccess();
     if (!ua?.congregation_id) { setError("No congregation assigned."); setLoading(false); return; }
     setAccess(ua);
     const { year, month, week } = calcWeek();
-    let { data: p } = await supabase.from("cashbook_period").select("*").eq("congregation_id", ua.congregation_id).eq("year", year).eq("month", month).eq("week", week).eq("service", "AM").maybeSingle();
+    const service = svc ?? selectedService;
+
+    let { data: p } = await supabase.from("cashbook_period").select("*").eq("congregation_id", ua.congregation_id).eq("year", year).eq("month", month).eq("week", week).eq("service", service).maybeSingle();
     if (!p) {
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: np } = await supabase.from("cashbook_period").insert({ congregation_id: ua.congregation_id, year, month, week, service: "AM", status: "Draft", submitted_by: user?.id }).select("*").single();
+      const { data: np } = await supabase.from("cashbook_period").insert({ congregation_id: ua.congregation_id, year, month, week, service, status: "Draft", submitted_by: user?.id }).select("*").single();
       p = np;
     }
     if (!p) { setError("Failed to load period."); setLoading(false); return; }
     setPeriod(p);
+
     const [li, att, off] = await Promise.all([
       supabase.from("cashbook_line_item").select("*").eq("period_id", p.id),
       supabase.from("cashbook_attachment").select("*"),
@@ -91,11 +100,18 @@ export default function CapturePage() {
     setAttachments((att.data ?? []).filter((a: Attachment) => ids.has(a.line_item_id)));
     setOfficers(off.data ?? []);
     setLoading(false);
-  }, []);
+  }, [selectedService]);
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Tab Filter Logic ──────────────────────────────────────────────────────
+  // Service change handler
+  function handleServiceChange(svc: "AM" | "PM") {
+    setSelectedService(svc);
+    setActiveOfficerId(null);
+    load(svc);
+  }
+
+  // ── Tab Filter ────────────────────────────────────────────────────────────
   function tabItems(tab: TabKey): LineItem[] {
     switch (tab) {
       case "Members": return items.filter(i => !i.is_officer && ["EFT", "Cash", "DirectDeposit"].includes(i.item_type));
@@ -107,20 +123,41 @@ export default function CapturePage() {
     }
   }
 
+  // ── Validation ────────────────────────────────────────────────────────────
+  function validateCapture(): string | null {
+    const amt = parseFloat(capAmount);
+    if (activeTab === "Members" || activeTab === "Officers") {
+      if (!capOfficerId) return "Officer is required";
+      if (!capAmount || isNaN(amt) || amt <= 0) return "Amount must be greater than 0";
+    }
+    if (activeTab === "Burial") {
+      if (!capRef.trim()) return "Receipt Number is required";
+      if (!capAmount || isNaN(amt) || amt <= 0) return "Amount must be greater than 0";
+    }
+    if (activeTab === "Expenses") {
+      if (!capRef.trim()) return "Description is required";
+      if (!capAmount || isNaN(amt) || amt <= 0) return "Amount must be greater than 0";
+    }
+    return null;
+  }
+
   // ── CRUD ──────────────────────────────────────────────────────────────────
   async function handleAddCapture() {
-    if (!period || !canEdit || !capAmount) return;
+    if (!period || !canEdit) return;
+    const err = validateCapture();
+    if (err) { setCapError(err); return; }
+    setCapError("");
     const amt = parseFloat(capAmount);
-    if (isNaN(amt) || amt <= 0) return;
     const isOfficerTab = activeTab === "Officers";
     const itemType = activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expense" : capType;
     await supabase.from("cashbook_line_item").insert({
-      period_id: period.id, section: isOfficerTab ? "Officers" : activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expenses" : "Members",
+      period_id: period.id,
+      section: isOfficerTab ? "Officers" : activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expenses" : "Members",
       item_type: itemType, amount: amt, officer_id: capOfficerId || null, is_officer: isOfficerTab,
-      payment_type: itemType, receipt_number: activeTab === "Burial" ? capRef : null,
-      manual_reference: activeTab === "Expenses" ? capRef : null, proof_status: null,
+      payment_type: itemType, receipt_number: activeTab === "Burial" ? capRef.trim() : null,
+      manual_reference: activeTab === "Expenses" ? capRef.trim() : null, proof_status: null,
     });
-    setCapAmount(""); setCapRef("");
+    setCapAmount(""); setCapRef(""); setCapError("");
     if (capOfficerId) setActiveOfficerId(capOfficerId);
     await load();
   }
@@ -132,11 +169,10 @@ export default function CapturePage() {
     await load();
   }
 
-  // ── Proof Modal Save ──────────────────────────────────────────────────────
+  // ── Proof Modal ───────────────────────────────────────────────────────────
   async function saveProof() {
     if (!proofModal || !proofFile || !period || !canEdit) return;
     const { itemId, type } = proofModal;
-    // Require date for EFT/DD/Cash
     if (["EFT", "DirectDeposit", "Cash", "CashPending"].includes(type) && !proofDate) return;
     const path = `proofs/${period.id}/${itemId}_${Date.now()}.jpg`;
     await supabase.storage.from("burial_proofs").upload(path, proofFile);
@@ -147,7 +183,6 @@ export default function CapturePage() {
       transaction_date: proofDate || null, bank_reference: proofBankRef || null,
     });
     await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", itemId);
-    // If Cash proof with date → mark as CashBanked
     if (type === "Cash" || type === "CashPending") {
       await supabase.from("cashbook_line_item").update({ item_type: "CashBanked", payment_type: "CashBanked" }).eq("id", itemId);
     }
@@ -177,7 +212,6 @@ export default function CapturePage() {
   const expensesTotal = items.filter(i => i.item_type === "Expense").reduce((s,i)=>s+Number(i.amount),0);
   const grandIncome = membersTotal + officersTotal + burialTotal;
 
-  // Grouped for Members/Officers tally
   const grouped = (tab: TabKey) => {
     const map = new Map<string, { officer: Officer | null; items: LineItem[] }>();
     tabItems(tab).forEach(item => {
@@ -199,17 +233,24 @@ export default function CapturePage() {
   // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div className="max-w-[1400px] mx-auto px-2 sm:px-4 py-2 pb-24">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2 text-xs">
-        <span className="font-medium">Week {period?.week} · {period?.service} · {period?.year}/{String(period?.month).padStart(2,"0")}</span>
+      {/* ─── HEADER: Week + Service Selector ─── */}
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-medium">Week {period?.week} · {period?.year}/{String(period?.month).padStart(2,"0")}</span>
+          {/* AM/PM Selector */}
+          <select className="h-7 rounded border border-input bg-background px-2 text-xs font-bold" value={selectedService} onChange={e => handleServiceChange(e.target.value as "AM" | "PM")}>
+            <option value="AM">AM</option>
+            <option value="PM">PM</option>
+          </select>
+        </div>
         <Badge variant={isDraft ? "outline" : "secondary"} className="text-[10px]">{period?.status}</Badge>
       </div>
       {success && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800 mb-2">{success}</div>}
 
-      {/* ═══ TABS ═══ */}
+      {/* ─── TABS ─── */}
       <div className="flex gap-1 overflow-x-auto mb-3 pb-1">
         {TABS.map(tab => (
-          <button key={tab} onClick={() => { setActiveTab(tab); setActiveOfficerId(null); }}
+          <button key={tab} onClick={() => { setActiveTab(tab); setActiveOfficerId(null); setCapError(""); }}
             className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${activeTab === tab ? "bg-blue-600 text-white font-bold shadow-sm" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}>
             {tab} ({tabItems(tab).length})
           </button>
@@ -218,29 +259,28 @@ export default function CapturePage() {
 
       {/* ═══ MAIN LAYOUT ═══ */}
       <div className="grid gap-3 md:grid-cols-[1fr_280px]">
-        {/* LEFT: Active Tab Content */}
         <div className="min-w-0 space-y-3">
 
-          {/* ─── CAPTURE BAR (not for Banking tab) ─── */}
+          {/* ─── CAPTURE BAR (not Banking) ─── */}
           {canEdit && activeTab !== "Banking" && (
             <div className="sticky top-12 z-30 bg-background border rounded-lg p-2 shadow-sm">
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
-                {/* Members/Officers: Officer select */}
+                {/* Members/Officers: Officer dropdown */}
                 {(activeTab === "Members" || activeTab === "Officers") && (
-                  <select className="h-9 rounded border border-input bg-background px-2 text-xs" value={capOfficerId} onChange={e => { setCapOfficerId(e.target.value); setActiveOfficerId(e.target.value || null); }}>
+                  <select className="h-9 rounded border border-input bg-background px-2 text-xs" value={capOfficerId} onChange={e => { setCapOfficerId(e.target.value); setActiveOfficerId(e.target.value || null); setCapError(""); }}>
                     <option value="">Select Officer...</option>
-                    {officers.map(o => <option key={o.id} value={o.id}>{o.officer_code} - {o.first_name}</option>)}
+                    {officers.map(o => <option key={o.id} value={o.id}>{officerLabel(o)}</option>)}
                   </select>
                 )}
                 {/* Burial: Receipt # */}
                 {activeTab === "Burial" && (
-                  <Input className="h-9 text-xs" placeholder="Receipt Number" value={capRef} onChange={e => setCapRef(e.target.value)} />
+                  <Input className="h-9 text-xs" placeholder="Receipt Number *" value={capRef} onChange={e => { setCapRef(e.target.value); setCapError(""); }} />
                 )}
                 {/* Expenses: Description */}
                 {activeTab === "Expenses" && (
-                  <Input className="h-9 text-xs" placeholder="Description" value={capRef} onChange={e => setCapRef(e.target.value)} />
+                  <Input className="h-9 text-xs" placeholder="Description *" value={capRef} onChange={e => { setCapRef(e.target.value); setCapError(""); }} />
                 )}
-                {/* Type (Members/Officers only) */}
+                {/* Type (Members/Officers) */}
                 {(activeTab === "Members" || activeTab === "Officers") && (
                   <select className="h-9 w-28 rounded border border-input bg-background px-2 text-xs" value={capType} onChange={e => setCapType(e.target.value)}>
                     <option value="EFT">EFT</option><option value="Cash">Cash</option><option value="DirectDeposit">DirectDeposit</option>
@@ -249,18 +289,20 @@ export default function CapturePage() {
                 {/* Amount */}
                 <div className="relative w-28">
                   <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R</span>
-                  <Input type="number" step="0.01" className="h-9 text-xs pl-5 text-right" placeholder="0.00" value={capAmount} onChange={e => setCapAmount(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleAddCapture(); }} />
+                  <Input type="number" step="0.01" className="h-9 text-xs pl-5 text-right" placeholder="0.00" value={capAmount} onChange={e => { setCapAmount(e.target.value); setCapError(""); }} onKeyDown={e => { if (e.key === "Enter") handleAddCapture(); }} />
                 </div>
-                {/* Add */}
-                <Button size="sm" className="h-9 text-xs" onClick={handleAddCapture}>+ Add</Button>
+                {/* Add button - disabled per validation */}
+                <Button size="sm" className="h-9 text-xs" onClick={handleAddCapture} disabled={!!validateCapture()}>+ Add</Button>
               </div>
+              {/* Validation error */}
+              {capError && <p className="text-destructive text-[11px] mt-1">{capError}</p>}
             </div>
           )}
 
           {/* ─── RUNNING TALLY ─── */}
           {activeOfficerId && activeItems.length > 0 && (activeTab === "Members" || activeTab === "Officers") && (
             <Card className="border-blue-200 bg-blue-50/30">
-              <CardHeader className="py-2 px-3"><CardTitle className="text-xs">Capturing: <span className="text-blue-700">{activeOfficer?.officer_code} - {activeOfficer?.first_name}</span></CardTitle></CardHeader>
+              <CardHeader className="py-2 px-3"><CardTitle className="text-xs">Capturing: <span className="text-blue-700">{activeOfficer ? officerLabel(activeOfficer) : "Unknown"}</span></CardTitle></CardHeader>
               <CardContent className="px-3 pb-3 space-y-1">
                 {activeItems.map(item => (
                   <div key={item.id} className="flex items-center gap-2 py-1 border-b last:border-0 text-xs">
@@ -278,7 +320,7 @@ export default function CapturePage() {
             </Card>
           )}
 
-          {/* ─── TAB CONTENT: Members / Officers ─── */}
+          {/* ─── MEMBERS / OFFICERS TAB CONTENT ─── */}
           {(activeTab === "Members" || activeTab === "Officers") && (
             <div className="space-y-2">
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] bg-muted/50 rounded px-2 py-1.5">
@@ -288,7 +330,7 @@ export default function CapturePage() {
               {grouped(activeTab).map(({ officer, items: gi }) => (
                 <details key={officer?.id ?? "none"} className="border rounded-lg overflow-hidden">
                   <summary className="flex items-center justify-between px-3 py-2 bg-muted/20 cursor-pointer text-xs">
-                    <span className="font-medium truncate">{officer ? `${officer.officer_code} - ${officer.first_name}` : "Unassigned"}</span>
+                    <span className="font-medium truncate">{officer ? officerLabel(officer) : "Unassigned"}</span>
                     <b className="shrink-0">R{gi.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</b>
                   </summary>
                   <div className="px-2 pb-2 pt-1 space-y-1">
@@ -306,7 +348,7 @@ export default function CapturePage() {
             </div>
           )}
 
-          {/* ─── TAB CONTENT: Burial ─── */}
+          {/* ─── BURIAL TAB ─── */}
           {activeTab === "Burial" && (
             <div className="space-y-2">
               <div className="flex justify-between text-[11px] bg-muted/50 rounded px-2 py-1.5">
@@ -324,7 +366,7 @@ export default function CapturePage() {
             </div>
           )}
 
-          {/* ─── TAB CONTENT: Expenses ─── */}
+          {/* ─── EXPENSES TAB ─── */}
           {activeTab === "Expenses" && (
             <div className="space-y-2">
               <div className="flex justify-between text-[11px] bg-muted/50 rounded px-2 py-1.5">
@@ -342,50 +384,57 @@ export default function CapturePage() {
             </div>
           )}
 
-          {/* ─── TAB CONTENT: Banking ─── */}
+          {/* ─── BANKING TAB (READ-ONLY) ─── */}
           {activeTab === "Banking" && (
             <div className="space-y-4">
-              {/* Section A: Banking Detail */}
+              {/* Section A: Banking Detail Report */}
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-xs">Banking Detail Report</CardTitle></CardHeader>
                 <CardContent>
-                  <table className="w-full text-xs">
-                    <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1">Date</th><th className="pb-1">Type</th><th className="pb-1 text-right">Amount</th><th className="pb-1">Officer</th><th className="pb-1">Ref</th><th className="pb-1">Proof</th></tr></thead>
-                    <tbody>
-                      {tabItems("Banking").map(item => {
-                        const att = getAttachment(item.id);
-                        const off = officers.find(o => o.id === item.officer_id);
-                        return (
-                          <tr key={item.id} className="border-b last:border-0">
-                            <td className="py-1">{att?.transaction_date ?? "—"}</td>
-                            <td className="py-1">{item.item_type}</td>
-                            <td className="py-1 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                            <td className="py-1">{off?.officer_code ?? "—"}</td>
-                            <td className="py-1">{att?.bank_reference ?? "—"}</td>
-                            <td className="py-1">{att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600">📷</a> : <span className="text-destructive">✗</span>}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  {tabItems("Banking").length === 0 ? <p className="text-xs text-muted-foreground">No banked items yet.</p> : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Date</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Name</th><th className="pb-1 pr-2">Ref</th><th className="pb-1">Proof</th></tr></thead>
+                        <tbody>
+                          {tabItems("Banking").map(item => {
+                            const att = getAttachment(item.id);
+                            const off = officers.find(o => o.id === item.officer_id);
+                            return (
+                              <tr key={item.id} className="border-b last:border-0">
+                                <td className="py-1.5 pr-2">{att?.transaction_date ?? "—"}</td>
+                                <td className="py-1.5 pr-2">{item.item_type}</td>
+                                <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                                <td className="py-1.5 pr-2 truncate max-w-[120px]">{off ? officerLabel(off) : "—"}</td>
+                                <td className="py-1.5 pr-2">{att?.bank_reference ?? "—"}</td>
+                                <td className="py-1.5">{att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600">📷 View</a> : <span className="text-destructive">✗</span>}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               {/* Section B: Cash Management */}
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-xs">Cash Management</CardTitle></CardHeader>
                 <CardContent>
-                  {items.filter(i => i.item_type === "Cash" && !i.is_officer).length === 0 && items.filter(i => i.item_type === "Cash" && i.is_officer).length === 0 ? (
+                  {items.filter(i => i.item_type === "Cash").length === 0 ? (
                     <p className="text-xs text-muted-foreground">No cash pending.</p>
                   ) : (
-                    <div className="space-y-1">
-                      {items.filter(i => i.item_type === "Cash").map(item => (
-                        <div key={item.id} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
-                          <span className="flex-1">{officers.find(o => o.id === item.officer_id)?.officer_code ?? "Cash"} — R{Number(item.amount).toFixed(2)}</span>
-                          <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => setProofModal({ itemId: item.id, type: "Cash" })} disabled={!canEdit}>
-                            Mark as Banked
-                          </Button>
-                        </div>
-                      ))}
+                    <div className="space-y-1.5">
+                      {items.filter(i => i.item_type === "Cash").map(item => {
+                        const off = officers.find(o => o.id === item.officer_id);
+                        return (
+                          <div key={item.id} className="flex items-center gap-2 text-xs py-1.5 border-b last:border-0">
+                            <span className="flex-1 truncate">{off ? officerLabel(off) : "Cash"} — R{Number(item.amount).toFixed(2)}</span>
+                            <Button size="sm" variant="outline" className="h-7 text-[10px] shrink-0" onClick={() => setProofModal({ itemId: item.id, type: "Cash" })} disabled={!canEdit}>
+                              Mark as Banked
+                            </Button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </CardContent>
@@ -450,12 +499,14 @@ export default function CapturePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/50" onClick={() => setProofModal(null)} />
           <Card className="relative z-10 w-full max-w-sm">
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Capture Proof</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">
+              {proofModal.type === "Cash" ? "Mark Cash as Banked" : "Capture Proof"}
+            </CardTitle></CardHeader>
             <CardContent className="space-y-3">
               {["EFT", "DirectDeposit", "Cash", "CashPending"].includes(proofModal.type) && (
                 <>
                   <div className="space-y-1">
-                    <Label className="text-xs">Date on Proof *</Label>
+                    <Label className="text-xs">{proofModal.type === "Cash" ? "Deposit Date *" : "Date on Proof *"}</Label>
                     <Input type="date" className="h-9 text-xs" value={proofDate} onChange={e => setProofDate(e.target.value)} required />
                   </div>
                   <div className="space-y-1">
@@ -465,11 +516,13 @@ export default function CapturePage() {
                 </>
               )}
               <div className="space-y-1">
-                <Label className="text-xs">Photo *</Label>
+                <Label className="text-xs">{proofModal.type === "Cash" ? "Upload Deposit Slip *" : "Photo *"}</Label>
                 <input type="file" accept="image/*" capture={isMobile ? "environment" : undefined} className="text-xs" onChange={e => setProofFile(e.target.files?.[0] ?? null)} />
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={saveProof} disabled={!proofFile || (["EFT","DirectDeposit","Cash","CashPending"].includes(proofModal.type) && !proofDate)}>Save Proof</Button>
+                <Button size="sm" onClick={saveProof} disabled={!proofFile || (["EFT","DirectDeposit","Cash","CashPending"].includes(proofModal.type) && !proofDate)}>
+                  {proofModal.type === "Cash" ? "Mark as Banked" : "Save Proof"}
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setProofModal(null)}>Cancel</Button>
               </div>
             </CardContent>
@@ -479,10 +532,10 @@ export default function CapturePage() {
     </div>
   );
 
-  // ── ProofButton Component ─────────────────────────────────────────────────
+  // ── ProofButton ───────────────────────────────────────────────────────────
   function ProofButton({ item }: { item: LineItem }) {
     const att = getAttachment(item.id);
-    if (att) return <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600 text-sm" title={att.transaction_date ?? "View"}>📷</a>;
+    if (att) return <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600 text-sm" title={att.transaction_date ? `Date: ${att.transaction_date}` : "View"}>📷</a>;
     if (!needsProof(item)) return <span className="text-muted-foreground text-[10px]">—</span>;
     return (
       <button className="relative text-sm" onClick={() => setProofModal({ itemId: item.id, type: item.item_type })} disabled={!canEdit} title="Take photo">
