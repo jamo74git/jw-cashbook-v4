@@ -16,15 +16,20 @@ interface LineItem { id: string; period_id: string; section: string; officer_id:
 interface Attachment { id: string; line_item_id: string; file_url: string; }
 interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; }
 
-// ─── Week Calculation ───────────────────────────────────────────────────────
-function calcWeek(): { year: number; month: number; week: number } {
-  const today = new Date();
-  const y = today.getFullYear(), m = today.getMonth() + 1;
+// ─── Week Calc ──────────────────────────────────────────────────────────────
+function calcWeek() {
+  const today = new Date(), y = today.getFullYear(), m = today.getMonth() + 1;
   const sundays: Date[] = [];
-  for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) { const dt = new Date(y, m - 1, d); if (dt.getDay() === 0) sundays.push(dt); }
+  for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) { if (new Date(y, m - 1, d).getDay() === 0) sundays.push(new Date(y, m - 1, d)); }
   let week = 1;
   for (let i = 1; i < sundays.length; i++) { if (today >= sundays[i]) week = i; }
   return { year: y, month: m, week };
+}
+
+// ─── Proof Policy ───────────────────────────────────────────────────────────
+const ALLOW_UPLOAD = process.env.NEXT_PUBLIC_ALLOW_PROOF_UPLOAD === "true";
+function needsProof(item: LineItem): boolean {
+  return ["EFT", "DirectDebit", "Burial", "Expense"].includes(item.item_type) || item.proof_status === "banked";
 }
 
 export default function CapturePage() {
@@ -38,41 +43,46 @@ export default function CapturePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [bankingOpen, setBankingOpen] = useState(false);
 
   const role = access?.role as Role | undefined;
   const isDraft = period?.status === "Draft";
   const canEdit = !!(role && hasPermission(role, "capture.edit") && isDraft);
   const canSubmit = !!(role && hasPermission(role, "capture.submit") && isDraft);
 
-  // ── Load Data ─────────────────────────────────────────────────────────────
+  // Detect mobile
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check(); window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // ── Load ──────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     const ua = await getUserAccess();
     if (!ua?.congregation_id) { setError("No congregation assigned."); setLoading(false); return; }
     setAccess(ua);
-    const congId = ua.congregation_id;
     const { year, month, week } = calcWeek();
 
-    // Get or create period
-    let { data: p } = await supabase.from("cashbook_period").select("*").eq("congregation_id", congId).eq("year", year).eq("month", month).eq("week", week).eq("service", "AM").maybeSingle();
+    let { data: p } = await supabase.from("cashbook_period").select("*").eq("congregation_id", ua.congregation_id).eq("year", year).eq("month", month).eq("week", week).eq("service", "AM").maybeSingle();
     if (!p) {
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: np } = await supabase.from("cashbook_period").insert({ congregation_id: congId, year, month, week, service: "AM", status: "Draft", submitted_by: user?.id }).select("*").single();
+      const { data: np } = await supabase.from("cashbook_period").insert({ congregation_id: ua.congregation_id, year, month, week, service: "AM", status: "Draft", submitted_by: user?.id }).select("*").single();
       p = np;
     }
     if (!p) { setError("Failed to load period."); setLoading(false); return; }
     setPeriod(p);
 
-    // Line items + attachments + officers
     const [li, att, off] = await Promise.all([
       supabase.from("cashbook_line_item").select("*").eq("period_id", p.id).order("section"),
-      supabase.from("cashbook_attachment").select("*"),
-      supabase.from("officers").select("id, officer_code, first_name, last_name").eq("congregation_id", congId).eq("is_active", true).order("officer_code"),
+      supabase.from("cashbook_attachment").select("id, line_item_id, file_url"),
+      supabase.from("officers").select("id, officer_code, first_name, last_name").eq("congregation_id", ua.congregation_id).eq("is_active", true).order("officer_code"),
     ]);
     setItems(li.data ?? []);
-    // Filter attachments to only those belonging to our line items
-    const itemIds = (li.data ?? []).map((i: LineItem) => i.id);
-    setAttachments((att.data ?? []).filter((a: Attachment) => itemIds.includes(a.line_item_id)));
+    const ids = new Set((li.data ?? []).map((i: LineItem) => i.id));
+    setAttachments((att.data ?? []).filter((a: Attachment) => ids.has(a.line_item_id)));
     setOfficers(off.data ?? []);
     setLoading(false);
   }, []);
@@ -80,9 +90,9 @@ export default function CapturePage() {
   useEffect(() => { load(); }, [load]);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
-  async function addRow(section: string, defaultType: string) {
+  async function addRow(section: string, defaultType: string, officerId?: string) {
     if (!period || !canEdit) return;
-    await supabase.from("cashbook_line_item").insert({ period_id: period.id, section, item_type: defaultType, amount: 0, officer_id: null, item_count: null, payment_type: defaultType, manual_reference: null, proof_status: null });
+    await supabase.from("cashbook_line_item").insert({ period_id: period.id, section, item_type: defaultType, amount: 0, officer_id: officerId || null, payment_type: defaultType, manual_reference: null, proof_status: null });
     await load();
   }
   async function updateRow(id: string, field: string, value: string | number | null) {
@@ -96,9 +106,9 @@ export default function CapturePage() {
     await supabase.from("cashbook_line_item").delete().eq("id", id);
     await load();
   }
-  async function uploadProof(lineItemId: string, file: File) {
+  async function captureProof(lineItemId: string, file: File) {
     if (!canEdit || !period) return;
-    const path = `proofs/${period.id}/${lineItemId}_${Date.now()}.${file.name.split(".").pop()}`;
+    const path = `proofs/${period.id}/${lineItemId}_${Date.now()}.jpg`;
     await supabase.storage.from("burial_proofs").upload(path, file);
     const { data: u } = supabase.storage.from("burial_proofs").getPublicUrl(path);
     const { data: { user } } = await supabase.auth.getUser();
@@ -120,17 +130,20 @@ export default function CapturePage() {
     await load();
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Computed Values ───────────────────────────────────────────────────────
   const sec = (s: string) => items.filter(i => i.section === s);
   const secTotal = (s: string) => sec(s).reduce((sum, i) => sum + Number(i.amount), 0);
-  const byType = (s: string, t: string) => sec(s).filter(i => i.item_type === t).reduce((sum, i) => sum + Number(i.amount), 0);
-  const byTypeCount = (s: string, t: string) => sec(s).filter(i => i.item_type === t).length;
+  const typeSum = (s: string, t: string) => sec(s).filter(i => i.item_type === t).reduce((sum, i) => sum + Number(i.amount), 0);
+  const typeCount = (s: string, t: string) => sec(s).filter(i => i.item_type === t).length;
   const hasProof = (id: string) => attachments.some(a => a.line_item_id === id);
-  const needsProof = (item: LineItem) => item.item_type !== "Cash" || item.section === "Burial" || item.section === "Expenses";
+  const getProofUrl = (id: string) => attachments.find(a => a.line_item_id === id)?.file_url;
   const missingProofs = items.filter(i => needsProof(i) && !hasProof(i.id));
   const grandIncome = secTotal("Members") + secTotal("Officers") + secTotal("Burial");
+  const allEFT = typeSum("Members", "EFT") + typeSum("Officers", "EFT") + typeSum("Burial", "EFT");
+  const allDD = typeSum("Members", "DirectDebit") + typeSum("Officers", "DirectDebit");
+  const allCash = typeSum("Members", "Cash") + typeSum("Officers", "Cash") + typeSum("Burial", "Cash");
 
-  // Group by officer for Members/Officers
+  // Group by officer
   const grouped = (section: string) => {
     const map = new Map<string, { officer: Officer | null; items: LineItem[] }>();
     sec(section).forEach(item => {
@@ -141,75 +154,97 @@ export default function CapturePage() {
     return Array.from(map.values());
   };
 
-  if (loading) return <div className="p-8 text-muted-foreground">Loading...</div>;
-  if (error) return <div className="p-8 text-destructive">{error}</div>;
+  if (loading) return <div className="p-6 text-muted-foreground text-sm">Loading...</div>;
+  if (error) return <div className="p-6 text-destructive text-sm">{error}</div>;
 
-  // ── Grouped Section Renderer (Members / Officers) ─────────────────────────
-  function renderGrouped(section: string, typeOptions: string[]) {
+  // ── Proof Button Component ────────────────────────────────────────────────
+  function ProofBtn({ item }: { item: LineItem }) {
+    const proofUrl = getProofUrl(item.id);
+    const required = needsProof(item);
+    if (proofUrl) return (
+      <a href={proofUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1">
+        <span className="text-green-600 text-lg">📷</span>
+        {/* Thumbnail on mobile */}
+        {isMobile && <img src={proofUrl} alt="" className="h-8 w-8 rounded object-cover border" />}
+      </a>
+    );
+    if (!required) return <span className="text-muted-foreground text-xs">—</span>;
+    return (
+      <label className="cursor-pointer inline-flex items-center gap-1 relative">
+        <span className="text-lg">{hasProof(item.id) ? "📷" : "📷"}</span>
+        {!hasProof(item.id) && required && <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-destructive" />}
+        <input
+          type="file"
+          accept="image/*"
+          capture={isMobile && !ALLOW_UPLOAD ? "environment" : undefined}
+          className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) captureProof(item.id, f); }}
+          disabled={!canEdit}
+        />
+      </label>
+    );
+  }
+
+  // ── Stats Bar (per section) ───────────────────────────────────────────────
+  function StatsBar({ section, types }: { section: string; types: string[] }) {
+    return (
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] bg-muted/50 rounded px-2 py-1.5 mb-2">
+        {types.map(t => (
+          <span key={t} className="whitespace-nowrap">
+            {t}: <b>R{typeSum(section, t).toFixed(2)}</b> <span className="text-muted-foreground">({typeCount(section, t)})</span>
+          </span>
+        ))}
+        <span className="ml-auto font-bold whitespace-nowrap">Total: R{secTotal(section).toFixed(2)}</span>
+      </div>
+    );
+  }
+
+  // ── Grouped Accordion Section (Members/Officers) ──────────────────────────
+  function GroupedSection({ section, types }: { section: string; types: string[] }) {
     const groups = grouped(section);
     return (
       <div className="space-y-2">
-        {/* Section Totals Bar */}
-        <div className="flex gap-4 text-xs bg-muted/60 rounded p-2">
-          {typeOptions.map(t => (
-            <span key={t}>{t}: <b>R{byType(section, t).toFixed(2)}</b> ({byTypeCount(section, t)})</span>
-          ))}
-          <span className="ml-auto font-semibold">Total: R{secTotal(section).toFixed(2)}</span>
-        </div>
-
-        {/* Accordion groups by officer */}
-        {groups.map(({ officer, items: groupItems }) => {
-          const officerTotal = groupItems.reduce((s, i) => s + Number(i.amount), 0);
-          const officerLabel = officer ? `${officer.officer_code} - ${officer.first_name} ${officer.last_name ?? ""}` : "Unassigned";
+        <StatsBar section={section} types={types} />
+        {groups.map(({ officer, items: gi }) => {
+          const total = gi.reduce((s, i) => s + Number(i.amount), 0);
+          const label = officer ? `${officer.officer_code} - ${officer.first_name}${officer.last_name ? " " + officer.last_name : ""}` : "Unassigned";
           return (
-            <details key={officer?.id ?? "none"} className="border rounded-md" open>
-              <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/40 text-sm">
-                <span className="font-medium">{officerLabel}</span>
-                <span className="font-semibold">R{officerTotal.toFixed(2)}</span>
+            <details key={officer?.id ?? "none"} className="border rounded-lg overflow-hidden" open>
+              <summary className="flex items-center justify-between px-3 py-2 bg-muted/30 cursor-pointer text-xs sm:text-sm">
+                <span className="font-medium truncate">{label}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {types.map(t => { const c = gi.filter(i => i.item_type === t); return c.length > 0 ? <span key={t} className="text-[10px] text-muted-foreground hidden sm:inline">{t}: R{c.reduce((s,i)=>s+Number(i.amount),0).toFixed(0)} ({c.length})</span> : null; })}
+                  <span className="font-bold text-xs">R{total.toFixed(2)}</span>
+                </div>
               </summary>
-              <div className="px-3 pb-3">
-                <table className="w-full text-xs">
-                  <thead><tr className="border-b text-muted-foreground text-left"><th className="py-1 w-[30%]">Type</th><th className="py-1 w-[35%] text-right">Amount</th><th className="py-1 w-[20%] text-center">Proof</th><th className="py-1 w-[15%]"></th></tr></thead>
-                  <tbody>
-                    {groupItems.map(item => (
-                      <tr key={item.id} className="border-b last:border-0">
-                        <td className="py-1.5">
-                          <select className="h-8 w-full rounded border border-input bg-background px-1 text-xs" value={item.item_type} onChange={e => updateRow(item.id, "item_type", e.target.value)} disabled={!canEdit}>
-                            {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                          </select>
-                        </td>
-                        <td className="py-1.5"><Input type="number" step="0.01" className="h-8 text-right text-xs" value={item.amount} onChange={e => updateRow(item.id, "amount", parseFloat(e.target.value) || 0)} disabled={!canEdit} /></td>
-                        <td className="py-1.5 text-center">
-                          {hasProof(item.id) ? (
-                            <span className="text-green-600 text-sm" title="Proof uploaded">📎</span>
-                          ) : needsProof(item) ? (
-                            <label className="cursor-pointer text-red-500 text-sm" title="Proof required">
-                              📎<input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(item.id, f); }} disabled={!canEdit} />
-                            </label>
-                          ) : <span className="text-muted-foreground text-sm">—</span>}
-                        </td>
-                        <td className="py-1.5 text-right">{canEdit && <button className="text-destructive text-xs hover:underline" onClick={() => deleteRow(item.id)}>Del</button>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="px-2 pb-2 pt-1 space-y-1.5">
+                {gi.map(item => (
+                  <div key={item.id} className="flex items-center gap-2 py-1 border-b last:border-0">
+                    <select className="h-8 flex-shrink-0 w-24 sm:w-28 rounded border border-input bg-background px-1 text-xs" value={item.item_type} onChange={e => updateRow(item.id, "item_type", e.target.value)} disabled={!canEdit}>
+                      {types.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <div className="relative flex-1">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R</span>
+                      <Input type="number" step="0.01" className="h-8 text-xs pl-5 text-right" value={item.amount} onChange={e => updateRow(item.id, "amount", parseFloat(e.target.value) || 0)} disabled={!canEdit} />
+                    </div>
+                    <ProofBtn item={item} />
+                    {canEdit && <button className="text-destructive text-xs shrink-0 hover:underline" onClick={() => deleteRow(item.id)}>✕</button>}
+                  </div>
+                ))}
               </div>
             </details>
           );
         })}
-
-        {/* Add Row */}
+        {/* Add row */}
         {canEdit && (
-          <div className="flex gap-2 mt-2">
-            <select id={`officer-${section}`} className="h-8 rounded border border-input bg-background px-2 text-xs flex-1">
+          <div className="flex gap-2">
+            <select id={`add-${section}`} className="h-8 flex-1 rounded border border-input bg-background px-2 text-xs">
               <option value="">Select officer...</option>
               {officers.map(o => <option key={o.id} value={o.id}>{o.officer_code} - {o.first_name}</option>)}
             </select>
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={async () => {
-              const sel = (document.getElementById(`officer-${section}`) as HTMLSelectElement)?.value;
-              if (!period) return;
-              await supabase.from("cashbook_line_item").insert({ period_id: period.id, section, item_type: typeOptions[0], amount: 0, officer_id: sel || null });
-              await load();
+            <Button size="sm" variant="outline" className="h-8 text-xs shrink-0" onClick={() => {
+              const sel = (document.getElementById(`add-${section}`) as HTMLSelectElement)?.value;
+              addRow(section, types[0], sel);
             }}>+ Add</Button>
           </div>
         )}
@@ -217,60 +252,112 @@ export default function CapturePage() {
     );
   }
 
-  // ── Flat Section Renderer (Burial / Expenses) ─────────────────────────────
-  function renderFlat(section: string, typeOptions: string[]) {
+  // ── Flat Section (Burial/Expenses) ────────────────────────────────────────
+  function FlatSection({ section, types }: { section: string; types: string[] }) {
     return (
       <div className="space-y-2">
-        <table className="w-full text-xs">
-          <thead><tr className="border-b text-muted-foreground text-left">
-            <th className="py-1 w-[30%]">Reference</th><th className="py-1 w-[20%]">Type</th><th className="py-1 w-[25%] text-right">Amount</th><th className="py-1 w-[15%] text-center">Proof</th><th className="py-1 w-[10%]"></th>
-          </tr></thead>
-          <tbody>
-            {sec(section).map(item => (
-              <tr key={item.id} className="border-b last:border-0">
-                <td className="py-1.5"><Input className="h-8 text-xs" value={item.manual_reference ?? ""} onChange={e => updateRow(item.id, "manual_reference", e.target.value)} disabled={!canEdit} placeholder={section === "Burial" ? "Receipt #" : "Description"} /></td>
-                <td className="py-1.5">
-                  <select className="h-8 w-full rounded border border-input bg-background px-1 text-xs" value={item.item_type} onChange={e => updateRow(item.id, "item_type", e.target.value)} disabled={!canEdit}>
-                    {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </td>
-                <td className="py-1.5"><Input type="number" step="0.01" className="h-8 text-right text-xs" value={item.amount} onChange={e => updateRow(item.id, "amount", parseFloat(e.target.value) || 0)} disabled={!canEdit} /></td>
-                <td className="py-1.5 text-center">
-                  {hasProof(item.id) ? <span className="text-green-600 text-sm">📎</span> : (
-                    <label className="cursor-pointer text-red-500 text-sm" title="Upload proof">
-                      📎<input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(item.id, f); }} disabled={!canEdit} />
-                    </label>
-                  )}
-                </td>
-                <td className="py-1.5 text-right">{canEdit && <button className="text-destructive text-xs hover:underline" onClick={() => deleteRow(item.id)}>Del</button>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <StatsBar section={section} types={types} />
+        {sec(section).map(item => (
+          <div key={item.id} className="flex items-center gap-2 py-1.5 border-b last:border-0">
+            <Input className="h-8 text-xs flex-1" value={item.manual_reference ?? ""} onChange={e => updateRow(item.id, "manual_reference", e.target.value)} disabled={!canEdit} placeholder={section === "Burial" ? "Receipt #" : "Description"} />
+            <select className="h-8 w-20 rounded border border-input bg-background px-1 text-xs shrink-0" value={item.item_type} onChange={e => updateRow(item.id, "item_type", e.target.value)} disabled={!canEdit}>
+              {types.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <div className="relative w-24 shrink-0">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R</span>
+              <Input type="number" step="0.01" className="h-8 text-xs pl-5 text-right" value={item.amount} onChange={e => updateRow(item.id, "amount", parseFloat(e.target.value) || 0)} disabled={!canEdit} />
+            </div>
+            <ProofBtn item={item} />
+            {canEdit && <button className="text-destructive text-xs shrink-0" onClick={() => deleteRow(item.id)}>✕</button>}
+          </div>
+        ))}
         <div className="flex justify-between items-center">
-          {canEdit && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => addRow(section, typeOptions[0])}>+ Add {section} Row</Button>}
-          <span className="text-xs font-semibold ml-auto">Total: R{secTotal(section).toFixed(2)}</span>
+          {canEdit && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => addRow(section, types[0])}>+ Add</Button>}
+          <span className="text-xs font-bold ml-auto">Total: R{secTotal(section).toFixed(2)}</span>
         </div>
       </div>
     );
   }
 
-  // ── Main Render ───────────────────────────────────────────────────────────
-  return (
-    <div className="max-w-[1600px] mx-auto px-3 py-3">
-      {/* Status Bar */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-xs">
-          <span>Week {period?.week} · {period?.service}</span>
-          <Badge variant={isDraft ? "outline" : "secondary"}>{period?.status}</Badge>
+  // ── Banking Panel Content ─────────────────────────────────────────────────
+  function BankingContent() {
+    return (
+      <div className="space-y-3 text-xs">
+        <div>
+          <p className="font-bold text-sm mb-1">INCOME: R{grandIncome.toFixed(2)}</p>
+          <div className="space-y-0.5 pl-2">
+            <p>EFT: <b>R{allEFT.toFixed(2)}</b></p>
+            <p>DirectDebit: <b>R{allDD.toFixed(2)}</b></p>
+            <p>Cash Pending: <b>R{allCash.toFixed(2)}</b></p>
+          </div>
         </div>
-        {success && <span className="text-xs text-green-700">{success}</span>}
+        <div className="border-t pt-2">
+          <p className="font-bold text-sm">EXPENSES: R{secTotal("Expenses").toFixed(2)}</p>
+        </div>
+        <div className="border-t pt-2">
+          <p className="font-bold text-sm text-primary">BALANCE: R{(grandIncome - secTotal("Expenses")).toFixed(2)}</p>
+        </div>
+        {canEdit && (
+          <Button size="sm" variant="outline" className="w-full text-xs mt-2" disabled>
+            Mark Cash as Banked (requires deposit slip)
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  // ── Totals Panel Content ──────────────────────────────────────────────────
+  function TotalsContent() {
+    return (
+      <div className="space-y-1 text-xs">
+        <div className="flex justify-between"><span>Members</span><b>R{secTotal("Members").toFixed(2)}</b></div>
+        <div className="flex justify-between"><span>Officers</span><b>R{secTotal("Officers").toFixed(2)}</b></div>
+        <div className="flex justify-between"><span>Burial</span><b>R{secTotal("Burial").toFixed(2)}</b></div>
+        <div className="flex justify-between border-t pt-1 font-bold"><span>Income</span><span>R{grandIncome.toFixed(2)}</span></div>
+        <div className="flex justify-between text-muted-foreground"><span>Expenses</span><span>R{secTotal("Expenses").toFixed(2)}</span></div>
+        <div className="border-t pt-1 mt-1">
+          <Badge variant={period?.status === "AuditApproved" ? "default" : period?.status === "Submitted" ? "secondary" : "outline"} className="text-[10px]">
+            {period?.status}
+          </Badge>
+          {missingProofs.length > 0 && isDraft && <p className="text-destructive mt-1">{missingProofs.length} proof(s) required</p>}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Mobile Banking Sheet ──────────────────────────────────────────────────
+  function MobileBankingSheet() {
+    if (!bankingOpen) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col justify-end">
+        <div className="absolute inset-0 bg-black/40" onClick={() => setBankingOpen(false)} />
+        <div className="relative bg-background rounded-t-xl p-4 pb-8 max-h-[70vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="font-bold text-sm">Banking Summary</h3>
+            <button onClick={() => setBankingOpen(false)} className="text-muted-foreground">✕</button>
+          </div>
+          <BankingContent />
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+  return (
+    <div className="max-w-[1600px] mx-auto px-2 sm:px-3 py-2 pb-24">
+      {/* Status + Week info */}
+      <div className="flex items-center justify-between mb-2 text-xs">
+        <span>Week {period?.week} · {period?.service} · {period?.year}/{String(period?.month).padStart(2,"0")}</span>
+        <Badge variant={isDraft ? "outline" : "secondary"} className="text-[10px]">{period?.status}</Badge>
       </div>
 
-      {/* 3-Column Layout */}
-      <div className="grid gap-3 lg:grid-cols-[1fr_280px_180px]">
+      {success && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800 mb-2">{success}</div>}
 
-        {/* ═══ LEFT: Capture Tabs (60%) ═══ */}
+      {/* ═══ DESKTOP: 3-Column ═══ */}
+      <div className="hidden md:grid md:grid-cols-[1fr_260px_160px] gap-3">
+        {/* Left: Tabs */}
         <div className="min-w-0">
           <Tabs defaultValue="Members">
             <TabsList className="w-full justify-start mb-2">
@@ -279,76 +366,74 @@ export default function CapturePage() {
               <TabsTrigger value="Burial">Burial ({sec("Burial").length})</TabsTrigger>
               <TabsTrigger value="Expenses">Expenses ({sec("Expenses").length})</TabsTrigger>
             </TabsList>
-            <TabsContent value="Members">{renderGrouped("Members", ["EFT", "Cash", "DirectDebit"])}</TabsContent>
-            <TabsContent value="Officers">{renderGrouped("Officers", ["Cash", "DirectDebit"])}</TabsContent>
-            <TabsContent value="Burial">{renderFlat("Burial", ["Cash", "EFT"])}</TabsContent>
-            <TabsContent value="Expenses">{renderFlat("Expenses", ["Expense"])}</TabsContent>
+            <TabsContent value="Members"><GroupedSection section="Members" types={["EFT", "Cash", "DirectDebit"]} /></TabsContent>
+            <TabsContent value="Officers"><GroupedSection section="Officers" types={["Cash", "DirectDebit"]} /></TabsContent>
+            <TabsContent value="Burial"><FlatSection section="Burial" types={["Cash", "EFT"]} /></TabsContent>
+            <TabsContent value="Expenses"><FlatSection section="Expenses" types={["Expense"]} /></TabsContent>
           </Tabs>
         </div>
-
-        {/* ═══ CENTER-RIGHT: Banking Panel (25%) ═══ */}
-        <Card className="h-fit">
-          <CardHeader className="pb-2"><CardTitle className="text-xs uppercase text-muted-foreground tracking-wider">Banking</CardTitle></CardHeader>
-          <CardContent className="space-y-3 text-xs">
-            <div>
-              <p className="font-semibold text-sm mb-1">INCOME: R{grandIncome.toFixed(2)}</p>
-              <div className="space-y-0.5 pl-2 text-muted-foreground">
-                <p>EFT: R{(byType("Members", "EFT") + byType("Officers", "EFT") + byType("Burial", "EFT")).toFixed(2)}</p>
-                <p>Direct Debit: R{(byType("Members", "DirectDebit") + byType("Officers", "DirectDebit")).toFixed(2)}</p>
-                <p>Cash: R{(byType("Members", "Cash") + byType("Officers", "Cash") + byType("Burial", "Cash")).toFixed(2)}</p>
-              </div>
-            </div>
-            <div className="border-t pt-2">
-              <p className="font-semibold text-sm">EXPENSES: R{secTotal("Expenses").toFixed(2)}</p>
-            </div>
-            <div className="border-t pt-2">
-              <p className="font-bold text-sm text-primary">BANK BALANCE: R{(grandIncome - secTotal("Expenses")).toFixed(2)}</p>
-            </div>
-          </CardContent>
+        {/* Center-Right: Banking */}
+        <Card className="h-fit sticky top-14">
+          <CardHeader className="pb-2"><CardTitle className="text-[10px] uppercase tracking-wider text-muted-foreground">Banking</CardTitle></CardHeader>
+          <CardContent><BankingContent /></CardContent>
         </Card>
+        {/* Far-Right: Totals */}
+        <Card className="h-fit sticky top-14">
+          <CardHeader className="pb-1"><CardTitle className="text-[10px] uppercase tracking-wider text-muted-foreground">Totals</CardTitle></CardHeader>
+          <CardContent><TotalsContent /></CardContent>
+        </Card>
+      </div>
 
-        {/* ═══ FAR-RIGHT: Totals + Status (15%) ═══ */}
-        <div className="space-y-3">
-          <Card className="h-fit">
-            <CardHeader className="pb-1"><CardTitle className="text-[10px] uppercase text-muted-foreground tracking-wider">Totals</CardTitle></CardHeader>
-            <CardContent className="space-y-1 text-xs">
-              <div className="flex justify-between"><span>Members</span><span className="font-semibold">R{secTotal("Members").toFixed(2)}</span></div>
-              <div className="flex justify-between"><span>Officers</span><span className="font-semibold">R{secTotal("Officers").toFixed(2)}</span></div>
-              <div className="flex justify-between"><span>Burial</span><span className="font-semibold">R{secTotal("Burial").toFixed(2)}</span></div>
-              <div className="flex justify-between border-t pt-1 font-bold"><span>Income</span><span>R{grandIncome.toFixed(2)}</span></div>
-              <div className="flex justify-between text-muted-foreground"><span>Expenses</span><span>R{secTotal("Expenses").toFixed(2)}</span></div>
-            </CardContent>
-          </Card>
+      {/* ═══ MOBILE: Single Column with extra tabs ═══ */}
+      <div className="md:hidden">
+        <Tabs defaultValue="Members">
+          <TabsList className="w-full justify-start overflow-x-auto mb-2 flex-nowrap">
+            <TabsTrigger value="Members">Members</TabsTrigger>
+            <TabsTrigger value="Officers">Officers</TabsTrigger>
+            <TabsTrigger value="Burial">Burial</TabsTrigger>
+            <TabsTrigger value="Expenses">Expenses</TabsTrigger>
+            <TabsTrigger value="Banking">Banking</TabsTrigger>
+            <TabsTrigger value="Totals">Totals</TabsTrigger>
+          </TabsList>
+          <TabsContent value="Members"><GroupedSection section="Members" types={["EFT", "Cash", "DirectDebit"]} /></TabsContent>
+          <TabsContent value="Officers"><GroupedSection section="Officers" types={["Cash", "DirectDebit"]} /></TabsContent>
+          <TabsContent value="Burial"><FlatSection section="Burial" types={["Cash", "EFT"]} /></TabsContent>
+          <TabsContent value="Expenses"><FlatSection section="Expenses" types={["Expense"]} /></TabsContent>
+          <TabsContent value="Banking"><BankingContent /></TabsContent>
+          <TabsContent value="Totals"><TotalsContent /></TabsContent>
+        </Tabs>
 
-          <Card className="h-fit">
-            <CardHeader className="pb-1"><CardTitle className="text-[10px] uppercase text-muted-foreground tracking-wider">Audit</CardTitle></CardHeader>
-            <CardContent>
-              <Badge variant={period?.status === "AuditApproved" ? "default" : period?.status === "Submitted" ? "secondary" : "outline"} className="text-[10px]">
-                {period?.status}
-              </Badge>
-              {missingProofs.length > 0 && isDraft && (
-                <p className="text-[10px] text-destructive mt-2">{missingProofs.length} proof(s) missing</p>
-              )}
-            </CardContent>
-          </Card>
+        {/* Mobile Summary Bar */}
+        <div className="mt-3 rounded bg-muted/50 px-3 py-2 flex justify-between text-xs">
+          <span>Income: <b>R{grandIncome.toFixed(2)}</b></span>
+          {missingProofs.length > 0 ? (
+            <span className="text-destructive font-medium">{missingProofs.length} Proofs Missing</span>
+          ) : (
+            <span className="text-green-700">All proofs OK</span>
+          )}
         </div>
       </div>
 
       {/* ═══ STICKY FOOTER ═══ */}
       {isDraft && (
-        <div className="sticky bottom-0 bg-background border-t mt-4 py-3 px-3 -mx-3 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">
-            {grandIncome === 0 ? "Add line items to enable submission" : missingProofs.length > 0 ? `${missingProofs.length} required proof(s) missing` : "Ready to submit"}
-          </span>
-          <div className="flex gap-2">
-            {canSubmit && (
-              <Button onClick={handleSubmit} disabled={submitting || grandIncome === 0 || missingProofs.length > 0} size="sm">
-                {submitting ? "Submitting..." : "Submit for Audit"}
-              </Button>
-            )}
+        <div className="fixed bottom-0 left-0 right-0 bg-background border-t px-3 py-3 z-40 md:sticky md:bottom-auto md:left-auto md:right-auto md:mt-4 md:rounded md:border">
+          <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground hidden sm:inline">
+              {grandIncome === 0 ? "Add items to begin" : missingProofs.length > 0 ? `${missingProofs.length} proof(s) required` : "Ready to submit"}
+            </span>
+            <div className="flex gap-2 w-full sm:w-auto">
+              {canSubmit && (
+                <Button onClick={handleSubmit} disabled={submitting || grandIncome === 0 || missingProofs.length > 0} size="sm" className="flex-1 sm:flex-none">
+                  {submitting ? "..." : "Submit for Audit"}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {/* Mobile Banking Sheet */}
+      <MobileBankingSheet />
     </div>
   );
 }
