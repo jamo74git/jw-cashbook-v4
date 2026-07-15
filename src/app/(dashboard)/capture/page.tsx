@@ -21,14 +21,56 @@ type FormState = { officerId: string; type: string; amount: string; ref: string;
 const TABS: TabKey[] = ["Members", "Officers", "Burial", "Expenses", "Banking"];
 const EMPTY_FORM: FormState = { officerId: "", type: "Cash", amount: "", ref: "", error: "" };
 
-function calcWeek() {
-  const today = new Date(), y = today.getFullYear(), m = today.getMonth() + 1;
+// ─── OAC Week Logic ─────────────────────────────────────────────────────────
+// Week 1 = 2nd Sunday of the month
+// Week 2 = 3rd Sunday ... up to Week 4/5
+// Last Week of month = 1st Sunday of NEXT month
+interface OacWeek { weekKey: string; weekNum: number; date: Date; label: string; }
+
+function getOacWeeks(year: number, month: number): OacWeek[] {
+  // Get all Sundays in this month
   const sundays: Date[] = [];
-  for (let d = 1; d <= new Date(y, m, 0).getDate(); d++) { if (new Date(y, m - 1, d).getDay() === 0) sundays.push(new Date(y, m - 1, d)); }
-  let week = 1;
-  for (let i = 1; i < sundays.length; i++) { if (today >= sundays[i]) week = i; }
-  return { year: y, month: m, week };
+  const daysInMonth = new Date(year, month, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(year, month - 1, d);
+    if (dt.getDay() === 0) sundays.push(dt);
+  }
+
+  // Get 1st Sunday of NEXT month (last capture week)
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+  for (let d = 1; d <= 7; d++) {
+    const dt = new Date(nextYear, nextMonth - 1, d);
+    if (dt.getDay() === 0) { sundays.push(dt); break; }
+  }
+
+  // Week 1 starts at 2nd Sunday (index 1), last week = 1st Sunday of next month
+  const weeks: OacWeek[] = [];
+  for (let i = 1; i < sundays.length; i++) {
+    const dt = sundays[i];
+    const weekNum = i; // Week 1, 2, 3, 4, (5)
+    const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const label = `${monthNames[month - 1]} ${year} - Week ${weekNum} [${String(dt.getDate()).padStart(2,"0")} ${monthNames[dt.getMonth()]}]`;
+    weeks.push({
+      weekKey: `${year}-${String(month).padStart(2,"0")}-W${weekNum}`,
+      weekNum, date: dt, label,
+    });
+  }
+  return weeks;
 }
+
+function getCurrentWeekKey(): { year: number; month: number; weekKey: string } {
+  const today = new Date();
+  const y = today.getFullYear(), m = today.getMonth() + 1;
+  const weeks = getOacWeeks(y, m);
+  // Find the week where today >= that Sunday but < next Sunday
+  let current = weeks[0];
+  for (let i = 0; i < weeks.length; i++) {
+    if (today >= weeks[i].date) current = weeks[i];
+  }
+  return { year: y, month: m, weekKey: current?.weekKey ?? `${y}-${String(m).padStart(2,"0")}-W1` };
+}
+
 function needsProof(item: LineItem): boolean { return ["EFT", "DirectDeposit", "Burial", "Expense"].includes(item.item_type); }
 function officerLabel(o: Officer): string { return `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}`; }
 
@@ -46,6 +88,8 @@ export default function CapturePage() {
   const [isMobile, setIsMobile] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("Members");
   const [selectedService, setSelectedService] = useState<"AM" | "PM">("AM");
+  const [selectedWeekKey, setSelectedWeekKey] = useState<string>("");
+  const [availableWeeks, setAvailableWeeks] = useState<OacWeek[]>([]);
   const [activeOfficerId, setActiveOfficerId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -78,45 +122,40 @@ export default function CapturePage() {
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
   // ── Load via RPC ──────────────────────────────────────────────────────────
-  const load = useCallback(async (svc?: "AM" | "PM") => {
+  const load = useCallback(async (svc?: "AM" | "PM", wk?: string) => {
     setLoading(true); setError(null);
     const ua = await getUserAccess();
     if (!ua?.congregation_id) { setError("No congregation assigned."); setLoading(false); return; }
     setAccess(ua);
     congIdRef.current = ua.congregation_id;
-    const { year, month, week } = calcWeek();
     const service = svc ?? selectedService;
 
-    // Use RPC to safely get or create period
+    // Calculate available weeks + current week
+    const { year, month, weekKey: currentWk } = getCurrentWeekKey();
+    const weeks = getOacWeeks(year, month);
+    setAvailableWeeks(weeks);
+    const weekKey = wk ?? (selectedWeekKey || currentWk);
+    if (!selectedWeekKey) setSelectedWeekKey(weekKey);
+
+    // Use RPC to get or create period
     const { data: { user } } = await supabase.auth.getUser();
     const { data: p, error: rpcErr } = await supabase.rpc("get_or_create_period", {
       p_congregation_id: ua.congregation_id,
-      p_year: year, p_month: month, p_week: week,
-      p_service: service, p_user_id: user?.id,
+      p_week_key: weekKey,
+      p_service: service,
+      p_user_id: user?.id,
     });
 
     if (rpcErr || !p) {
-      // Fallback: try direct query if RPC not deployed yet
-      let { data: fallback } = await supabase.from("cashbook_period").select("*")
-        .eq("congregation_id", ua.congregation_id).eq("year", year).eq("month", month)
-        .eq("week", week).eq("service", service).maybeSingle();
-      if (!fallback) {
-        const { data: created } = await supabase.from("cashbook_period").insert({
-          congregation_id: ua.congregation_id, year, month, week, service, status: "Draft", submitted_by: user?.id
-        }).select("*").single();
-        fallback = created;
-      }
-      if (!fallback) { setError("Failed to load period. Run rpc_get_or_create_period.sql in SQL Editor."); setLoading(false); return; }
-      setPeriod(fallback);
-    } else {
-      setPeriod(p);
+      // Fallback if RPC not deployed
+      setError(`Period error: ${rpcErr?.message ?? "RPC not found"}. Run rpc_get_or_create_period.sql.`);
+      setLoading(false);
+      return;
     }
-
-    const periodId = p?.id ?? period?.id;
-    if (!periodId) { setLoading(false); return; }
+    setPeriod(p);
 
     const [li, att, off] = await Promise.all([
-      supabase.from("cashbook_line_item").select("*").eq("period_id", periodId),
+      supabase.from("cashbook_line_item").select("*").eq("period_id", p.id),
       supabase.from("cashbook_attachment").select("*"),
       supabase.from("officers").select("id, officer_code, first_name, last_name").eq("congregation_id", ua.congregation_id).eq("is_active", true).order("officer_code"),
     ]);
@@ -125,14 +164,20 @@ export default function CapturePage() {
     setAttachments((att.data ?? []).filter((a: Attachment) => ids.has(a.line_item_id)));
     setOfficers(off.data ?? []);
     setLoading(false);
-  }, [selectedService]);
+  }, [selectedService, selectedWeekKey]);
 
   useEffect(() => { load(); }, [load]);
 
   function handleServiceChange(svc: "AM" | "PM") {
     setSelectedService(svc);
     setActiveOfficerId(null);
-    load(svc);
+    load(svc, selectedWeekKey);
+  }
+
+  function handleWeekChange(wk: string) {
+    setSelectedWeekKey(wk);
+    setActiveOfficerId(null);
+    load(selectedService, wk);
   }
 
   function handleTabChange(tab: TabKey) {
@@ -255,10 +300,14 @@ export default function CapturePage() {
   return (
     <div className="max-w-[1400px] mx-auto px-2 sm:px-4 py-2 pb-24">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium">Week {period?.week} · {period?.year}/{String(period?.month).padStart(2,"0")}</span>
-          <select className="h-7 rounded border border-input bg-background px-2 text-xs font-bold" value={selectedService} onChange={e => handleServiceChange(e.target.value as "AM"|"PM")}>
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          {/* Week Selector */}
+          <select className="h-7 rounded border border-input bg-background px-2 text-xs font-medium max-w-[220px]" value={selectedWeekKey} onChange={e => handleWeekChange(e.target.value)}>
+            {availableWeeks.map(w => <option key={w.weekKey} value={w.weekKey}>{w.label}</option>)}
+          </select>
+          {/* AM/PM */}
+          <select className="h-7 rounded border border-input bg-background px-2 text-xs font-bold w-16" value={selectedService} onChange={e => handleServiceChange(e.target.value as "AM"|"PM")}>
             <option value="AM">AM</option><option value="PM">PM</option>
           </select>
         </div>
