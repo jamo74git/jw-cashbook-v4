@@ -11,78 +11,62 @@ import type { UserHierarchyAccess } from "@/lib/types";
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
   const router = useRouter();
-
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
-  const [email, setEmail] = useState("");
+  const [congName, setCongName] = useState("");
+  const [congCode, setCongCode] = useState("");
+  const [elderName, setElderName] = useState("");
+  const [overseerName, setOverseerName] = useState("");
   const [showMenu, setShowMenu] = useState(false);
 
   useEffect(() => {
     (async () => {
       const a = await getUserAccess();
+      if (!a) return;
       setAccess(a);
-      const { data: { user } } = await supabase.auth.getUser();
-      setEmail(user?.email ?? "");
+      if (a.congregation_id) {
+        const { data: cong } = await supabase.from("congregations").select("name, code, eldership_id, overseership_id").eq("id", a.congregation_id).single();
+        if (cong) {
+          setCongName(cong.name); setCongCode(cong.code);
+          if (cong.eldership_id) { const { data: e } = await supabase.from("hierarchy_levels").select("name").eq("id", cong.eldership_id).single(); if (e) setElderName(e.name); }
+          if (cong.overseership_id) { const { data: o } = await supabase.from("hierarchy_levels").select("name").eq("id", cong.overseership_id).single(); if (o) setOverseerName(o.name); }
+        }
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
-
-  const initials = email ? email.slice(0, 2).toUpperCase() : "??";
+  async function handleSignOut() { await supabase.auth.signOut(); router.push("/login"); }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-muted/30">
       {/* Top Bar */}
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex h-14 items-center justify-between px-4 max-w-7xl mx-auto">
-          {/* Left: Logo + Title */}
-          <div className="flex items-center gap-3">
-            <Image src="/nac-logo.png" alt="NAC" width={32} height={32} className="rounded" />
-            <span className="text-sm font-semibold tracking-tight text-primary hidden sm:inline">
-              OAC Management System
-            </span>
+      <header className="sticky top-0 z-50 border-b bg-background shadow-sm">
+        <div className="flex h-12 items-center justify-between px-3 max-w-[1600px] mx-auto">
+          {/* Left: Logo + Cong Info */}
+          <div className="flex items-center gap-4">
+            <Image src="/nac-logo.png" alt="NAC" width={28} height={28} className="rounded" />
+            <div className="hidden sm:flex items-center gap-4 text-xs">
+              <span className="font-semibold text-primary">OAC Management System</span>
+              <span className="text-muted-foreground">|</span>
+              <span><b>{congCode}</b> {congName}</span>
+              {elderName && <><span className="text-muted-foreground">|</span><span>Elder: {elderName}</span></>}
+              {overseerName && <><span className="text-muted-foreground">|</span><span>Overseer: {overseerName}</span></>}
+            </div>
           </div>
-
-          {/* Right: User info + Avatar dropdown */}
-          <div className="relative flex items-center gap-3">
-            {access && (
-              <Badge variant="secondary" className="hidden sm:inline-flex">
-                {access.role}
-              </Badge>
-            )}
-            <span className="text-xs text-muted-foreground hidden md:inline">{email}</span>
-
-            {/* Avatar button */}
-            <button
-              onClick={() => setShowMenu(!showMenu)}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold hover:bg-primary/90 transition-colors"
-            >
-              {initials}
+          {/* Right: Role + Avatar */}
+          <div className="relative flex items-center gap-2">
+            {access && <Badge variant="secondary" className="text-[10px]">{access.role}</Badge>}
+            <button onClick={() => setShowMenu(!showMenu)} className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold hover:bg-primary/90">
+              {access?.role?.slice(0, 2).toUpperCase() ?? "??"}
             </button>
-
-            {/* Dropdown */}
             {showMenu && (
-              <div className="absolute right-0 top-10 z-50 min-w-48 rounded-md border bg-background p-2 shadow-lg">
-                <div className="px-3 py-2 border-b mb-1">
-                  <p className="text-sm font-medium">{email}</p>
-                  <p className="text-xs text-muted-foreground">{access?.role} · {access?.scope_level}</p>
-                </div>
-                <button
-                  onClick={handleSignOut}
-                  className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted transition-colors text-destructive"
-                >
-                  Sign Out
-                </button>
+              <div className="absolute right-0 top-9 z-50 min-w-36 rounded-md border bg-background p-1 shadow-lg">
+                <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">Sign Out</button>
               </div>
             )}
           </div>
         </div>
       </header>
-
-      {/* Main Content */}
       <main className="flex-1">{children}</main>
     </div>
   );
