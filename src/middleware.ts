@@ -8,6 +8,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const ROUTE_ROLE_MAP: Record<string, string[]> = {
   "/dashboard": [],                                          // All roles
+  "/elder": ["Elder"],                                         // Elder dashboard
   "/capture": ["Treasurer", "Chairperson", "Elder"],         // Capture flow
   "/audit": ["Auditor", "Chairperson", "Elder", "HO"],      // Audit queue
   "/review": ["Overseer", "Apostle", "HO"],                  // Overseer/HO review
@@ -104,7 +105,7 @@ export async function middleware(request: NextRequest) {
         HO: "/admin",
         Apostle: "/review",
         Overseer: "/review",
-        Elder: "/dashboard",
+        Elder: "/elder",
         Chairperson: "/chairperson",
         Treasurer: "/treasurer",
         Auditor: "/audit",
@@ -131,7 +132,7 @@ export async function middleware(request: NextRequest) {
         HO: "/admin",
         Apostle: "/review",
         Overseer: "/review",
-        Elder: "/dashboard",
+        Elder: "/elder",
         Chairperson: "/chairperson",
         Treasurer: "/treasurer",
         Auditor: "/audit",
