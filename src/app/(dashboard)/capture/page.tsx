@@ -159,12 +159,17 @@ export default function CapturePage() {
       supabase.from("cashbook_attachment").select("*"),
       supabase.from("officers").select("id, officer_code, first_name, last_name").eq("congregation_id", ua.congregation_id).eq("is_active", true).order("officer_code"),
     ]);
-    setItems(li.data ?? []);
-    const ids = new Set((li.data ?? []).map((i: LineItem) => i.id));
+    // Filter out orphan rows (officer_id=null for Members/Officers)
+    const validItems = (li.data ?? []).filter((i: LineItem) =>
+      !(i.officer_id === null && ["EFT","Cash","DirectDeposit"].includes(i.item_type) && ["Members","Officers"].includes(i.section))
+    );
+    setItems(validItems);
+    const ids = new Set(validItems.map((i: LineItem) => i.id));
     setAttachments((att.data ?? []).filter((a: Attachment) => ids.has(a.line_item_id)));
     setOfficers(off.data ?? []);
     setLoading(false);
-  }, [selectedService, selectedWeekKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -216,6 +221,19 @@ export default function CapturePage() {
     return null;
   }
 
+  // ── Fast refetch (line items only, no full reload) ─────────────────────────
+  async function refetchItems() {
+    if (!period) return;
+    const { data: li } = await supabase.from("cashbook_line_item").select("*").eq("period_id", period.id);
+    const validItems = (li ?? []).filter((i: LineItem) =>
+      !(i.officer_id === null && ["EFT","Cash","DirectDeposit"].includes(i.item_type) && ["Members","Officers"].includes(i.section))
+    );
+    setItems(validItems);
+    const ids = new Set(validItems.map((i: LineItem) => i.id));
+    const { data: att } = await supabase.from("cashbook_attachment").select("*");
+    setAttachments((att ?? []).filter((a: Attachment) => ids.has(a.line_item_id)));
+  }
+
   // ── CRUD ──────────────────────────────────────────────────────────────────
   async function handleAddCapture() {
     if (!period || !canEdit) return;
@@ -233,17 +251,18 @@ export default function CapturePage() {
       payment_type: itemType, receipt_number: activeTab === "Burial" ? form.ref.trim() : null,
       manual_reference: activeTab === "Expenses" ? form.ref.trim() : null, proof_status: null,
     });
-    // Reset only amount + ref for this tab (keep officer selected for rapid entry)
+    // Reset amount + ref (keep officer for rapid entry)
     setForm({ amount: "", ref: "", error: "" });
     if (form.officerId) setActiveOfficerId(form.officerId);
-    await load();
+    // Fast refetch for immediate totals update
+    await refetchItems();
   }
 
   async function deleteRow(id: string) {
     if (!canEdit) return;
     await supabase.from("cashbook_attachment").delete().eq("line_item_id", id);
     await supabase.from("cashbook_line_item").delete().eq("id", id);
-    await load();
+    await refetchItems();
   }
 
   // ── Proof Modal ───────────────────────────────────────────────────────────
@@ -265,7 +284,7 @@ export default function CapturePage() {
       await supabase.from("cashbook_line_item").update({ item_type: "CashBanked", payment_type: "CashBanked" }).eq("id", itemId);
     }
     setProofModal(null); setProofDate(""); setProofBankRef(""); setProofFile(null);
-    await load();
+    await refetchItems();
   }
 
   async function handleSubmit() {
@@ -317,7 +336,7 @@ export default function CapturePage() {
       {toast && <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-destructive text-destructive-foreground px-4 py-2 rounded-md text-xs shadow-lg">{toast}</div>}
 
       {/* Tabs */}
-      <div className="flex gap-1 overflow-x-auto mb-3 pb-1">
+      <div className="flex gap-1 overflow-x-auto mb-2 pb-1">
         {TABS.map(tab => (
           <button key={tab} onClick={() => handleTabChange(tab)}
             className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${activeTab === tab ? "bg-blue-600 text-white font-bold shadow-sm" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}>
@@ -325,6 +344,25 @@ export default function CapturePage() {
           </button>
         ))}
       </div>
+
+      {/* ─── RUNNING TOTALS BANNER ─── */}
+      {(activeTab === "Members" || activeTab === "Officers") && (
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          {["EFT", "DirectDeposit", "Cash"].map(t => {
+            const filtered = tabItems(activeTab).filter(i => i.item_type === t);
+            const total = filtered.reduce((s, i) => s + Number(i.amount), 0);
+            return (
+              <Card key={t} className="bg-blue-50 border-blue-200">
+                <CardContent className="py-2 px-3 text-center">
+                  <p className="text-[10px] uppercase text-blue-600 font-medium">{t === "DirectDeposit" ? "Direct Deposit" : t}</p>
+                  <p className="text-sm font-bold text-blue-900">R{total.toFixed(2)}</p>
+                  <p className="text-[10px] text-blue-500">{filtered.length} {filtered.length === 1 ? "entry" : "entries"}</p>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-[1fr_280px]">
         <div className="min-w-0 space-y-3">
@@ -391,8 +429,8 @@ export default function CapturePage() {
               {grouped(activeTab).map(({ officer, items: gi }) => (
                 <details key={officer?.id ?? "none"} className="border rounded-lg overflow-hidden">
                   <summary className="flex items-center justify-between px-3 py-2 bg-muted/20 cursor-pointer text-xs">
-                    <span className="font-medium truncate">{officer ? officerLabel(officer) : "Unassigned"}</span>
-                    <b className="shrink-0">R{gi.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</b>
+                    <span className="font-medium truncate max-w-[40%]">{officer ? officerLabel(officer) : "Unassigned"}</span>
+                    <b className="shrink-0 text-right">R{gi.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</b>
                   </summary>
                   <div className="px-2 pb-2 pt-1 space-y-1">
                     {gi.map(item => (
@@ -436,8 +474,8 @@ export default function CapturePage() {
               </div>
               {tabItems("Expenses").map(item => (
                 <div key={item.id} className="flex items-center gap-2 py-2 border-b last:border-0 text-xs">
-                  <span className="flex-1 truncate">{item.manual_reference || "—"}</span>
-                  <span className="w-20 text-right font-medium">R{Number(item.amount).toFixed(2)}</span>
+                  <span className="flex-1 truncate max-w-[200px]">{item.manual_reference || "—"}</span>
+                  <span className="w-[120px] text-right font-medium shrink-0">R{Number(item.amount).toFixed(2)}</span>
                   <ProofBtn item={item} />
                   {canEdit && <button className="text-destructive" onClick={() => deleteRow(item.id)}>✕</button>}
                 </div>
