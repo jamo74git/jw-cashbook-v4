@@ -158,8 +158,9 @@ export function getDashboardRoute(role: Role): string {
     case "Elder":
       return "/dashboard";
     case "Chairperson":
+      return "/chairperson";
     case "Treasurer":
-      return "/capture";
+      return "/treasurer";
     case "Auditor":
       return "/audit";
     case "Secretary":

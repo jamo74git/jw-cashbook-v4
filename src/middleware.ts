@@ -16,7 +16,8 @@ const ROUTE_ROLE_MAP: Record<string, string[]> = {
   "/admin": ["HO"],                                          // HO admin only
   "/reports": [],                                            // All roles (export gated in-page)
   "/messages": [],                                           // All except Secretary (gated in-page)
-  "/treasurer": ["Treasurer", "Chairperson", "Elder"],       // Legacy route redirect
+  "/treasurer": ["Treasurer"],                               // Treasurer dashboard
+  "/chairperson": ["Chairperson"],                           // Chairperson dashboard
   "/oac": ["Treasurer", "Chairperson", "Elder"],             // Legacy cashbook
 };
 
@@ -104,8 +105,8 @@ export async function middleware(request: NextRequest) {
         Apostle: "/review",
         Overseer: "/review",
         Elder: "/dashboard",
-        Chairperson: "/capture",
-        Treasurer: "/capture",
+        Chairperson: "/chairperson",
+        Treasurer: "/treasurer",
         Auditor: "/audit",
         Secretary: "/reports",
       };
@@ -131,8 +132,8 @@ export async function middleware(request: NextRequest) {
         Apostle: "/review",
         Overseer: "/review",
         Elder: "/dashboard",
-        Chairperson: "/capture",
-        Treasurer: "/capture",
+        Chairperson: "/chairperson",
+        Treasurer: "/treasurer",
         Auditor: "/audit",
         Secretary: "/reports",
       };
