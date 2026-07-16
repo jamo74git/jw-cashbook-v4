@@ -258,11 +258,24 @@ export default function CapturePage() {
     if (!proofModal || !proofFile || !period || !canEdit) return;
     const { itemId, type } = proofModal;
     if (["EFT","DirectDeposit","Cash","CashPending"].includes(type) && !proofDate) return;
-    const path = `proofs/${period.id}/${itemId}_${Date.now()}.jpg`;
-    await supabase.storage.from("burial_proofs").upload(path, proofFile);
-    const { data: u } = supabase.storage.from("burial_proofs").getPublicUrl(path);
+
+    // Build storage path: {congregation_id}/{year}/{month}/{service}_{week_key}/{user_id}/{timestamp}-proof.jpg
     const { data: { user } } = await supabase.auth.getUser();
-    await supabase.from("cashbook_attachment").insert({ line_item_id: itemId, file_url: u.publicUrl, uploaded_by: user?.id, transaction_date: proofDate || null, bank_reference: proofBankRef || null });
+    const congId = access?.congregation_id ?? period.congregation_id;
+    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.jpg`;
+
+    await supabase.storage.from("cashbook_proofs").upload(storagePath, proofFile);
+    const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
+
+    await supabase.from("cashbook_attachment").insert({
+      line_item_id: itemId,
+      file_url: u.publicUrl,
+      uploaded_by: user?.id,
+      transaction_date: proofDate || null,
+      bank_reference: proofBankRef || null,
+      congregation_id: congId,
+    });
     await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", itemId);
     if (["Cash","CashPending"].includes(type)) {
       await supabase.from("cashbook_line_item").update({ item_type: "CashBanked", payment_type: "CashBanked" }).eq("id", itemId);
