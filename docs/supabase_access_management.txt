@@ -1,0 +1,29 @@
+How Kiro should implement the app (frontend contract)
+Kiro should expose an Admin section (HO only) with these actions:
+
+Bulk create
+Upload file / preview parsed rows
+Submit to Edge Function with:
+requester metadata (implicitly from JWT)
+rows payload
+Create single
+Same as bulk but one row
+Modify user / change role
+Submit a “diff” (before/after fields) to the Edge Function
+Set inactive
+Submit target identifier (user id/email) and congregation scope
+The important part: the frontend only submits requests; the Edge Function enforces scope and hierarchy.
+
+
+Kiro Model 
+Because access only works when there’s a row in public.user_hierarchy_access, your admin workflows must follow this rule:
+
+HO creates/updates Auth users (server-side)
+HO creates/updates public.user_hierarchy_access (app access ledger)
+HO creates/updates public.officers (person details)
+No HO UUIDs need to be entered: the CSV should use human identifiers (email/phone + congregation code, etc.) and the server resolves hierarchy IDs.
+Also: since officers are not auth users, your workflow is:
+
+Auth user = login identity
+Officer = person details linked to a congregation_id
+Access = user_hierarchy_access rows (which grant HO/admin/officer permissions elsewhere)
