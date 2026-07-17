@@ -4,37 +4,91 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
 import { AppHeader } from "@/components/AppHeader";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import type { UserHierarchyAccess } from "@/lib/types";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
 interface Congregation { id: string; name: string; code: string; }
-interface TitheRow { congregation: string; memberTithe: number; officerTithe: number; total: number; lastMonthTotal: number; pctChange: number | null; }
-interface MissingOfficer { officerCode: string; firstName: string; lastName: string | null; congregation: string; }
-interface CashRisk { officerCode: string; amount: number; paymentType: string; congregation: string; }
-interface CongStatus { id: string; name: string; code: string; status: string | null; pending: number; periodId: string | null; }
-interface Settings { id?: string; congregation_id: string; expense_approval_threshold: number; proof_mandatory: boolean; allow_chair_submit: boolean; }
 
-export default function ElderPageV2() {
+// Tab 1: Governance
+interface GovRow { congName: string; code: string; completed: number; awaitingAudit: number; auditApproved: number; submittedToOverseer: number; lastEdit: string | null; }
+
+// Tab 2: Monthly Submission
+interface WeekData { week: number; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; }
+interface SubmissionRow { congId: string; congName: string; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; weeks: WeekData[]; totalWeeks: number; allAuditApproved: boolean; }
+
+// Tab 3: Priest Review
+interface PriestRow { officerCode: string; membersCash: number; membersDeposit: number; priestTotal: number; officersCash: number; officersDeposit: number; officerTotal: number; }
+interface PriestCongRow { congId: string; congName: string; membersCash: number; membersDeposit: number; priestTotal: number; officersCash: number; officersDeposit: number; officerTotal: number; priests: PriestRow[]; }
+interface CashRiskItem { priestCode: string; amount: number; pct: number; }
+
+// Tab 4: Audit Log
+interface AuditRow { date: string; congregation: string; field: string; oldVal: string; newVal: string; by: string; }
+
+type TabKey = "governance" | "submission" | "priest" | "risk";
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "governance", label: "Governance" },
+  { key: "submission", label: "Monthly Submission" },
+  { key: "priest", label: "Priest Review" },
+  { key: "risk", label: "Risk & Audit" },
+];
+
+// Colors matching the images
+const C = {
+  headerBg: "#1a5276",
+  headerText: "#ffffff",
+  completed: "#27ae60",
+  awaiting: "#e67e22",
+  approved: "#2980b9",
+  submitted: "#8e44ad",
+  priestTotal: "#c0392b",
+  officerTotal: "#1abc9c",
+  pctBg: "#d4e6f1",
+  yellowHighlight: "#f9e79f",
+  cashRisk1: "#1a5276",
+  cashRisk2: "#2e86c1",
+  cashRisk3: "#85c1e9",
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function ElderDashboard() {
   const supabase = createClient();
-  const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
+  const [, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [congregations, setCongregations] = useState<Congregation[]>([]);
-  const [titheRows, setTitheRows] = useState<TitheRow[]>([]);
-  const [missingOfficers, setMissingOfficers] = useState<MissingOfficer[]>([]);
-  const [cashRisks, setCashRisks] = useState<CashRisk[]>([]);
-  const [congStatuses, setCongStatuses] = useState<CongStatus[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>("governance");
   const [selectedMonth, setSelectedMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Tab data
+  const [govRows, setGovRows] = useState<GovRow[]>([]);
+  const [subRows, setSubRows] = useState<SubmissionRow[]>([]);
+  const [priestRows, setPriestRows] = useState<PriestCongRow[]>([]);
+  const [cashRisks, setCashRisks] = useState<CashRiskItem[]>([]);
+  const [totalCash, setTotalCash] = useState(0);
+  const [totalEFT, setTotalEFT] = useState(0);
+  const [eldershipTotal, setEldershipTotal] = useState(0);
+  const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
+
+  // Block future months
+  function handleMonthChange(val: string) {
+    const [y, m] = val.split("-").map(Number);
+    const now = new Date();
+    if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) {
+      setToast("Cannot select future period");
+      return;
+    }
+    setSelectedMonth(val);
+  }
 
   useEffect(() => { loadAll(); }, [selectedMonth]);
 
@@ -44,278 +98,377 @@ export default function ElderPageV2() {
     if (!ua) { setLoading(false); return; }
     setAccess(ua);
 
-    // Get Elder's congregations via eldership_id
     const { data: congs } = await supabase.from("congregations").select("id, name, code").eq("eldership_id", ua.hierarchy_id);
     const congList = congs ?? [];
     setCongregations(congList);
     const congIds = congList.map(c => c.id);
     if (congIds.length === 0) { setLoading(false); return; }
 
-    // Parse selected month
     const [year, month] = selectedMonth.split("-").map(Number);
-    const lastYear = month === 1 ? year - 1 : year;
-    const lastMonth = month === 1 ? 12 : month - 1;
 
-    // Get all periods for this month + last month for these congregations
-    const { data: thisMonthPeriods } = await supabase.from("cashbook_period").select("id, congregation_id").in("congregation_id", congIds).eq("year", year).eq("month", month);
-    const { data: lastMonthPeriods } = await supabase.from("cashbook_period").select("id, congregation_id").in("congregation_id", congIds).eq("year", lastYear).eq("month", lastMonth);
+    // Get all periods for this month
+    const { data: periods } = await supabase.from("cashbook_period").select("id, congregation_id, week, status, created_at")
+      .in("congregation_id", congIds).eq("year", year).eq("month", month);
+    const allPeriods = periods ?? [];
+    const periodIds = allPeriods.map(p => p.id);
 
-    const thisPeriodIds = (thisMonthPeriods ?? []).map(p => p.id);
-    const lastPeriodIds = (lastMonthPeriods ?? []).map(p => p.id);
-
-    // Get line items for this month (Members + Officers, excluding Burial)
-    const { data: thisItems } = thisPeriodIds.length > 0
-      ? await supabase.from("cashbook_line_item").select("period_id, section, is_officer, item_type, amount, officer_id").in("period_id", thisPeriodIds).in("section", ["Members", "Officers"])
+    // Get all line items for these periods
+    const { data: allItems } = periodIds.length > 0
+      ? await supabase.from("cashbook_line_item").select("id, period_id, section, is_officer, item_type, amount, officer_id, proof_status").in("period_id", periodIds)
       : { data: [] };
-    const { data: lastItems } = lastPeriodIds.length > 0
-      ? await supabase.from("cashbook_line_item").select("period_id, section, is_officer, amount").in("period_id", lastPeriodIds).in("section", ["Members", "Officers"])
-      : { data: [] };
+    const items = allItems ?? [];
 
-    // Build tithe rows per congregation
-    const rows: TitheRow[] = congList.map(c => {
-      const cThisPeriodIds = (thisMonthPeriods ?? []).filter(p => p.congregation_id === c.id).map(p => p.id);
-      const cLastPeriodIds = (lastMonthPeriods ?? []).filter(p => p.congregation_id === c.id).map(p => p.id);
-      const cThisItems = (thisItems ?? []).filter(i => cThisPeriodIds.includes(i.period_id));
-      const cLastItems = (lastItems ?? []).filter(i => cLastPeriodIds.includes(i.period_id));
+    // Get officers
+    const { data: officers } = await supabase.from("officers").select("id, officer_code, congregation_id").in("congregation_id", congIds).eq("is_active", true);
+    const allOfficers = officers ?? [];
 
-      const memberTithe = cThisItems.filter(i => !i.is_officer).reduce((s, i) => s + Number(i.amount), 0);
-      const officerTithe = cThisItems.filter(i => i.is_officer).reduce((s, i) => s + Number(i.amount), 0);
-      const total = memberTithe + officerTithe;
-      const lastTotal = cLastItems.reduce((s, i) => s + Number(i.amount), 0);
-      const pctChange = lastTotal > 0 ? Math.round(((total - lastTotal) / lastTotal) * 1000) / 10 : null;
-
-      return { congregation: c.name, memberTithe, officerTithe, total, lastMonthTotal: lastTotal, pctChange };
+    // ─── TAB 1: Governance ──────────────────────────────────────────────────
+    const gov: GovRow[] = congList.map(c => {
+      const cPeriods = allPeriods.filter(p => p.congregation_id === c.id);
+      const lastPeriod = cPeriods.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      return {
+        congName: c.name, code: c.code,
+        completed: cPeriods.filter(p => p.status === "Draft").length,
+        awaitingAudit: cPeriods.filter(p => p.status === "Submitted").length,
+        auditApproved: cPeriods.filter(p => p.status === "AuditApproved").length,
+        submittedToOverseer: cPeriods.filter(p => ["SubmittedToHO","HOReviewed"].includes(p.status)).length,
+        lastEdit: lastPeriod?.created_at ? new Date(lastPeriod.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null,
+      };
     });
-    setTitheRows(rows);
+    setGovRows(gov);
 
-    // Officers missing tithe this month
-    const { data: allOfficers } = await supabase.from("officers").select("id, officer_code, first_name, last_name, congregation_id").in("congregation_id", congIds).eq("is_active", true);
-    const officersWithTithe = new Set((thisItems ?? []).filter(i => i.is_officer && i.officer_id).map(i => i.officer_id));
-    const missing: MissingOfficer[] = (allOfficers ?? []).filter(o => !officersWithTithe.has(o.id)).map(o => ({
-      officerCode: o.officer_code, firstName: o.first_name, lastName: o.last_name,
-      congregation: congList.find(c => c.id === o.congregation_id)?.name ?? "",
-    }));
-    setMissingOfficers(missing);
+    // ─── TAB 2: Monthly Submission ──────────────────────────────────────────
+    // Calculate how many Sundays (weeks) this month has using OAC logic
+    const sundays: number[] = [];
+    for (let d = 1; d <= new Date(year, month, 0).getDate(); d++) { if (new Date(year, month-1, d).getDay() === 0) sundays.push(d); }
+    const totalWeeks = Math.min(sundays.length, 5); // OAC: 2nd Sunday = W1, so weeks = sundays.length - 1, plus last week from next month
 
-    // Cash risk: EFT/DD without proof (top 3)
-    const { data: riskyItems } = thisPeriodIds.length > 0
-      ? await supabase.from("cashbook_line_item").select("id, officer_id, amount, item_type, period_id, proof_status")
-          .in("period_id", thisPeriodIds).in("item_type", ["EFT", "DirectDeposit"]).is("proof_status", null).order("amount", { ascending: false }).limit(3)
-      : { data: [] };
-    const risks: CashRisk[] = (riskyItems ?? []).map(i => {
-      const periodCong = (thisMonthPeriods ?? []).find(p => p.id === i.period_id)?.congregation_id;
-      const off = (allOfficers ?? []).find(o => o.id === i.officer_id);
-      return { officerCode: off?.officer_code ?? "—", amount: Number(i.amount), paymentType: i.item_type, congregation: congList.find(c => c.id === periodCong)?.name ?? "" };
+    const sub: SubmissionRow[] = congList.map(c => {
+      const cPeriods = allPeriods.filter(p => p.congregation_id === c.id);
+      const cItems = items.filter(i => cPeriods.map(p=>p.id).includes(i.period_id));
+
+      const sumByWeekAndType = (week: number, isOff: boolean, types: string[]) =>
+        cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.is_officer === isOff && types.includes(i.item_type); }).reduce((s,i)=>s+Number(i.amount),0);
+      const sumBurial = (week: number) => cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.item_type === "Burial"; }).reduce((s,i)=>s+Number(i.amount),0);
+      const sumExpense = (week: number) => cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.item_type === "Expense"; }).reduce((s,i)=>s+Number(i.amount),0);
+
+      const weeks: WeekData[] = Array.from({ length: 5 }, (_, i) => ({
+        week: i + 1,
+        membersCash: sumByWeekAndType(i+1, false, ["Cash","CashBanked","CashPending"]),
+        membersDeposit: sumByWeekAndType(i+1, false, ["EFT","DirectDeposit"]),
+        officersCash: sumByWeekAndType(i+1, true, ["Cash","CashBanked","CashPending"]),
+        officersDeposit: sumByWeekAndType(i+1, true, ["EFT","DirectDeposit"]),
+        burial: sumBurial(i+1),
+        expenses: sumExpense(i+1),
+      }));
+
+      const allApproved = cPeriods.length > 0 && cPeriods.every(p => p.status === "AuditApproved");
+
+      return {
+        congId: c.id, congName: c.name,
+        membersCash: cItems.filter(i=>!i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        membersDeposit: cItems.filter(i=>!i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        officersCash: cItems.filter(i=>i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        officersDeposit: cItems.filter(i=>i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        burial: cItems.filter(i=>i.item_type==="Burial").reduce((s,i)=>s+Number(i.amount),0),
+        expenses: cItems.filter(i=>i.item_type==="Expense").reduce((s,i)=>s+Number(i.amount),0),
+        weeks, totalWeeks, allAuditApproved: allApproved,
+      };
     });
-    setCashRisks(risks);
+    setSubRows(sub);
 
-    // Congregation statuses
-    const statuses: CongStatus[] = [];
-    for (const c of congList) {
-      const { data: period } = await supabase.from("cashbook_period").select("id, status").eq("congregation_id", c.id).eq("year", year).eq("month", month).order("week", { ascending: false }).limit(1).maybeSingle();
-      const { count } = await supabase.from("cashbook_period").select("id", { count: "exact", head: true }).eq("congregation_id", c.id).eq("status", "Submitted");
-      statuses.push({ id: c.id, name: c.name, code: c.code, status: period?.status ?? null, pending: count ?? 0, periodId: period?.id ?? null });
-    }
-    setCongStatuses(statuses);
+    // ─── TAB 3: Priest Review ───────────────────────────────────────────────
+    const priestData: PriestCongRow[] = congList.map(c => {
+      const cPeriods = allPeriods.filter(p => p.congregation_id === c.id);
+      const cItems = items.filter(i => cPeriods.map(p=>p.id).includes(i.period_id));
+      const cOfficers = allOfficers.filter(o => o.congregation_id === c.id);
 
-    // Settings
-    const { data: s } = await supabase.from("congregation_settings").select("*").eq("congregation_id", congIds[0]).maybeSingle();
-    setSettings(s ?? { congregation_id: congIds[0], expense_approval_threshold: 500, proof_mandatory: false, allow_chair_submit: true });
+      const priests: PriestRow[] = cOfficers.map(o => {
+        const oItems = cItems.filter(i => i.officer_id === o.id);
+        const mCash = oItems.filter(i=>!i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+        const mDep = oItems.filter(i=>!i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+        const oCash = oItems.filter(i=>i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+        const oDep = oItems.filter(i=>i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+        return { officerCode: o.officer_code, membersCash: mCash, membersDeposit: mDep, priestTotal: mCash + mDep, officersCash: oCash, officersDeposit: oDep, officerTotal: oCash + oDep };
+      });
+
+      const totMC = priests.reduce((s,p)=>s+p.membersCash,0);
+      const totMD = priests.reduce((s,p)=>s+p.membersDeposit,0);
+      const totOC = priests.reduce((s,p)=>s+p.officersCash,0);
+      const totOD = priests.reduce((s,p)=>s+p.officersDeposit,0);
+      return { congId: c.id, congName: c.name, membersCash: totMC, membersDeposit: totMD, priestTotal: totMC+totMD, officersCash: totOC, officersDeposit: totOD, officerTotal: totOC+totOD, priests };
+    });
+    setPriestRows(priestData);
+
+    // Cash risk: top 3 priestships by cash amount
+    const allPriests = priestData.flatMap(c => c.priests.map(p => ({ ...p, cong: c.congName })));
+    const totalC = allPriests.reduce((s,p)=>s+p.membersCash+p.officersCash,0);
+    const totalE = allPriests.reduce((s,p)=>s+p.membersDeposit+p.officersDeposit,0);
+    const totalAll = totalC + totalE;
+    setTotalCash(totalC); setTotalEFT(totalE); setEldershipTotal(totalAll);
+    const riskSorted = allPriests.filter(p => (p.membersCash + p.officersCash) > 0).sort((a,b) => (b.membersCash+b.officersCash) - (a.membersCash+a.officersCash)).slice(0, 3);
+    setCashRisks(riskSorted.map(p => ({ priestCode: p.officerCode, amount: p.membersCash + p.officersCash, pct: totalAll > 0 ? Math.round(((p.membersCash+p.officersCash)/totalAll)*100) : 0 })));
+
+    // ─── TAB 4: Audit Log ───────────────────────────────────────────────────
+    // For now show period status changes as audit events
+    setAuditRows(allPeriods.filter(p => p.status !== "Draft").map(p => ({
+      date: new Date(p.created_at).toLocaleDateString(), congregation: congList.find(c=>c.id===p.congregation_id)?.name ?? "",
+      field: "status", oldVal: "Draft", newVal: p.status, by: "—"
+    })));
 
     setLoading(false);
   }
 
-  async function handleSaveSettings() {
-    if (!settings || !access) return;
-    setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (settings.id) {
-      await supabase.from("congregation_settings").update({ expense_approval_threshold: settings.expense_approval_threshold, proof_mandatory: settings.proof_mandatory, allow_chair_submit: settings.allow_chair_submit, updated_by: user?.id, updated_at: new Date().toISOString() }).eq("id", settings.id);
-    } else {
-      await supabase.from("congregation_settings").insert({ ...settings, updated_by: user?.id });
-    }
-    setSaving(false); setShowSettings(false); setSuccess("Settings saved.");
+  function toggleExpand(id: string) {
+    setExpanded(prev => { const n = new Set(prev); if (n.has(id)) { n.delete(id); } else { n.add(id); } return n; });
   }
 
-  async function handleSubmitToOverseer() {
-    if (!access) return;
+  async function handleSubmitAll() {
     setSubmitting(true);
     const congIds = congregations.map(c => c.id);
-    await supabase.from("cashbook_period").update({ status: "SubmittedToHO" }).in("congregation_id", congIds).eq("status", "Submitted");
-    setSuccess("Submitted to Overseer."); setSubmitting(false);
-    await loadAll();
+    const [year, month] = selectedMonth.split("-").map(Number);
+    await supabase.from("cashbook_period").update({ status: "SubmittedToHO" }).in("congregation_id", congIds).eq("year", year).eq("month", month).eq("status", "AuditApproved");
+    setSubmitting(false); await loadAll();
   }
 
   if (loading) return <><AppHeader /><div className="p-6 text-sm text-muted-foreground">Loading...</div></>;
 
-  const readyCount = congStatuses.filter(c => c.status && c.status !== "Draft").length;
-  const allReady = readyCount === congStatuses.length && congStatuses.length > 0;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [year, month] = selectedMonth.split("-").map(Number);
+  const monthName = new Date(year, month-1).toLocaleString("en", { month: "long" });
 
   return (
     <>
       <AppHeader />
-      <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
+      <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+        {toast && <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-destructive text-white px-4 py-2 rounded-md text-xs shadow-lg">{toast}</div>}
+
         {/* Month selector */}
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold">Elder Dashboard</h1>
-          <input type="month" className="h-8 rounded border border-input bg-background px-2 text-xs" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} />
+          <h2 className="text-sm font-bold" style={{ color: C.headerBg }}>Current Month - {monthName} {year}</h2>
+          <input type="month" className="h-8 rounded border border-input bg-background px-2 text-xs" value={selectedMonth} onChange={e => handleMonthChange(e.target.value)} />
         </div>
 
-        {success && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800">{success}</div>}
+        {/* Tabs */}
+        <div className="flex gap-1 border-b" style={{ borderColor: C.headerBg }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${activeTab === t.key ? "border-current font-bold" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              style={activeTab === t.key ? { color: C.headerBg, borderColor: C.headerBg } : {}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-        {/* ═══ TABS ═══ */}
-        <Tabs defaultValue="tithe">
-          <TabsList className="w-full justify-start">
-            <TabsTrigger value="tithe">Monthly Overview</TabsTrigger>
-            <TabsTrigger value="status">Congregations</TabsTrigger>
-            <TabsTrigger value="risk">Risk & Audit</TabsTrigger>
-          </TabsList>
+        {/* ─── TAB 1: GOVERNANCE ─── */}
+        {activeTab === "governance" && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead><tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                <th className="px-3 py-2 text-left">Congregation</th><th className="px-2 py-2">Code</th>
+                <th className="px-2 py-2" style={{ color: C.completed }}>Completed</th>
+                <th className="px-2 py-2" style={{ color: C.awaiting }}>Awaiting Audit</th>
+                <th className="px-2 py-2" style={{ color: C.approved }}>Audit Approved</th>
+                <th className="px-2 py-2" style={{ color: C.submitted }}>Submitted to Overseer</th>
+                <th className="px-2 py-2">Last Edit</th><th className="px-2 py-2">Action</th>
+              </tr></thead>
+              <tbody>{govRows.map(r => (
+                <tr key={r.code} className="border-b">
+                  <td className="px-3 py-2 font-medium">{r.congName}</td><td className="px-2 py-2 text-center">{r.code}</td>
+                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.completed }}>{r.completed || "-"}</td>
+                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.awaiting }}>{r.awaitingAudit || "-"}</td>
+                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.approved }}>{r.auditApproved || "-"}</td>
+                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.submitted }}>{r.submittedToOverseer || "-"}</td>
+                  <td className="px-2 py-2 text-center">{r.lastEdit ?? "—"}</td>
+                  <td className="px-2 py-2"><Button size="sm" variant="outline" className="h-6 text-[10px]">Review</Button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
 
-          {/* ─── TAB 1: Monthly Overview (Tithe) ─── */}
-          <TabsContent value="tithe">
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Tithe Summary — {selectedMonth}</CardTitle></CardHeader>
-              <CardContent>
-                <table className="w-full text-xs">
-                  <thead><tr className="border-b text-left text-muted-foreground">
-                    <th className="pb-2">Congregation</th><th className="pb-2 text-right">Member Tithe</th><th className="pb-2 text-right">Officer Tithe</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">vs Last Month</th>
-                  </tr></thead>
-                  <tbody>
-                    {titheRows.map(r => (
-                      <tr key={r.congregation} className="border-b last:border-0">
-                        <td className="py-2 font-medium">{r.congregation}</td>
-                        <td className="py-2 text-right">R{r.memberTithe.toFixed(2)}</td>
-                        <td className="py-2 text-right">R{r.officerTithe.toFixed(2)}</td>
-                        <td className="py-2 text-right font-semibold">R{r.total.toFixed(2)}</td>
-                        <td className="py-2 text-right">
-                          {r.pctChange !== null ? (
-                            <span className={r.pctChange >= 0 ? "text-green-600" : "text-destructive"}>{r.pctChange > 0 ? "+" : ""}{r.pctChange}%</span>
-                          ) : <span className="text-muted-foreground">—</span>}
-                        </td>
+        {/* ─── TAB 2: MONTHLY SUBMISSION ─── */}
+        {activeTab === "submission" && (
+          <div className="space-y-2">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                    <th className="px-2 py-1" rowSpan={2}></th><th className="px-2 py-1" rowSpan={2}>Congregation</th>
+                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={2}>Members</th>
+                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={2}>Officers</th>
+                    <th className="px-2 py-1 text-center">Burial</th><th className="px-2 py-1 text-center">Expenses</th><th className="px-2 py-1"></th>
+                  </tr>
+                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
+                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
+                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Cash</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subRows.map(r => (<>
+                    {/* Congregation total row */}
+                    <tr key={r.congId} className="border-b font-medium bg-muted/30">
+                      <td className="px-2 py-2 cursor-pointer text-center" onClick={() => toggleExpand(`sub-${r.congId}`)}>{expanded.has(`sub-${r.congId}`) ? "−" : "+"}</td>
+                      <td className="px-2 py-2 font-bold">{r.congName}</td>
+                      <td className="px-2 py-2 text-right">R {r.membersCash.toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right">R {r.membersDeposit.toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right">R {r.officersCash.toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right">R {r.officersDeposit.toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right">R {r.burial.toFixed(2)}</td>
+                      <td className="px-2 py-2 text-right">R {r.expenses.toFixed(2)}</td>
+                      <td className="px-2 py-2">
+                        <Button size="sm" variant="outline" className="h-6 text-[10px]" disabled={!r.allAuditApproved} title={r.allAuditApproved ? "" : "Complete audits first"}>
+                          Submit to Overseer
+                        </Button>
+                      </td>
+                    </tr>
+                    {/* Expanded week rows */}
+                    {expanded.has(`sub-${r.congId}`) && r.weeks.map(w => (
+                      <tr key={`${r.congId}-w${w.week}`} className="border-b text-muted-foreground">
+                        <td></td>
+                        <td className="px-2 py-1 pl-8">Week {w.week}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.membersCash.toFixed(2)}` : "x"}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R${w.membersDeposit.toFixed(2)}` : "x"}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.officersCash.toFixed(2)}` : "x"}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.officersDeposit.toFixed(2)}` : "x"}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R${w.burial.toFixed(2)}` : "x"}</td>
+                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.expenses.toFixed(2)}` : "x"}</td>
+                        <td></td>
                       </tr>
                     ))}
-                  </tbody>
-                </table>
-                {/* Totals row */}
-                <div className="flex justify-between pt-2 border-t text-xs font-bold">
-                  <span>Grand Total</span>
-                  <span>R{titheRows.reduce((s, r) => s + r.total, 0).toFixed(2)}</span>
-                </div>
-              </CardContent>
-            </Card>
+                  </>))}
+                </tbody>
+              </table>
+            </div>
+            {/* Submit All button */}
+            <div className="text-center space-y-1 pt-2">
+              <Button onClick={handleSubmitAll} disabled={submitting || !subRows.every(r => r.allAuditApproved)} className="px-6">
+                {submitting ? "..." : "Submit All Approved to Overseer"}
+              </Button>
+              <p className="text-[10px] text-muted-foreground">All congregations must be past Draft status before submitting to Overseer.</p>
+            </div>
+          </div>
+        )}
 
-            {/* Officers missing tithe */}
-            {missingOfficers.length > 0 && (
-              <Card className="mt-3 border-destructive/30">
-                <CardHeader className="pb-1"><CardTitle className="text-xs text-destructive">Officers with R0 Tithe this month</CardTitle></CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-2 text-[10px]">
-                    {missingOfficers.slice(0, 10).map((o, i) => (
-                      <span key={i} className="bg-destructive/10 text-destructive px-2 py-0.5 rounded">{o.officerCode} - {o.firstName} ({o.congregation})</span>
-                    ))}
-                    {missingOfficers.length > 10 && <span className="text-muted-foreground">+{missingOfficers.length - 10} more</span>}
+        {/* ─── TAB 3: PRIEST REVIEW ─── */}
+        {activeTab === "priest" && (
+          <div className="space-y-4">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                    <th className="px-2 py-1" rowSpan={2}></th><th className="px-2 py-1 text-left" rowSpan={2}>Priest Review</th>
+                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={3}>Members</th>
+                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={3}>Officers</th>
+                  </tr>
+                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-bold">Priestship Total</th>
+                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-bold">Officer Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {priestRows.map(c => {
+                    const isExp = expanded.has(`pr-${c.congId}`);
+                    const congTotal = c.priestTotal + c.officerTotal;
+                    return (<>
+                      {/* Congregation row */}
+                      <tr key={c.congId} className="border-b font-medium">
+                        <td className="px-2 py-2 cursor-pointer text-center" onClick={() => toggleExpand(`pr-${c.congId}`)}>{isExp ? "−" : "+"}</td>
+                        <td className="px-2 py-2 font-bold">{c.congName}</td>
+                        <td className="px-2 py-2 text-right">R {c.membersCash.toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right">R {c.membersDeposit.toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-white" style={{ backgroundColor: C.priestTotal }}>R {c.priestTotal.toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right">R {c.officersCash.toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right">R {c.officersDeposit.toFixed(2)}</td>
+                        <td className="px-2 py-2 text-right font-bold text-white" style={{ backgroundColor: C.officerTotal }}>R {c.officerTotal.toFixed(2)}</td>
+                      </tr>
+                      {/* % Split row */}
+                      <tr className="border-b" style={{ backgroundColor: C.pctBg }}>
+                        <td></td><td className="px-2 py-1 text-[10px] text-muted-foreground">% Split</td>
+                        <td className="px-2 py-1 text-right text-[10px]">{congTotal > 0 ? Math.round((c.membersCash/congTotal)*100) : 0}%</td>
+                        <td className="px-2 py-1 text-right text-[10px]">{congTotal > 0 ? Math.round((c.membersDeposit/congTotal)*100) : 0}%</td>
+                        <td className="px-2 py-1 text-right text-[10px] font-bold" style={{ backgroundColor: C.priestTotal, color: "white" }}>{eldershipTotal > 0 ? Math.round((c.priestTotal/eldershipTotal)*100) : 0}%</td>
+                        <td className="px-2 py-1 text-right text-[10px]">{congTotal > 0 ? Math.round((c.officersCash/congTotal)*100) : 0}%</td>
+                        <td className="px-2 py-1 text-right text-[10px]">{congTotal > 0 ? Math.round((c.officersDeposit/congTotal)*100) : 0}%</td>
+                        <td className="px-2 py-1 text-right text-[10px] font-bold" style={{ backgroundColor: C.officerTotal, color: "white" }}>{eldershipTotal > 0 ? Math.round((c.officerTotal/eldershipTotal)*100) : 0}%</td>
+                      </tr>
+                      {/* Expanded priest rows */}
+                      {isExp && c.priests.map(p => (
+                        <tr key={`${c.congId}-${p.officerCode}`} className="border-b" style={{ backgroundColor: p.officerTotal === 0 ? C.yellowHighlight : undefined }}>
+                          <td></td><td className="px-2 py-1 pl-8">{p.officerCode}</td>
+                          <td className="px-2 py-1 text-right">R {p.membersCash.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right">R {p.membersDeposit.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right font-medium">R {p.priestTotal.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right">R {p.officersCash.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right">R {p.officersDeposit.toFixed(2)}</td>
+                          <td className="px-2 py-1 text-right font-medium">{p.officerTotal > 0 ? `R ${p.officerTotal.toFixed(2)}` : "R -"}</td>
+                        </tr>
+                      ))}
+                    </>);
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Cash Risk Card */}
+            <Card>
+              <CardContent className="py-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs font-bold mb-2">Cash Risk:</p>
+                    <div className="flex gap-2">
+                      {cashRisks.map((r, i) => (
+                        <div key={i} className="text-center">
+                          <p className="text-[10px] font-medium">{i+1}</p>
+                          <p className="text-[10px]">{r.priestCode} - R{r.amount.toFixed(0)}</p>
+                          <div className="h-4 rounded text-[9px] text-white flex items-center justify-center" style={{ backgroundColor: i === 0 ? C.cashRisk1 : i === 1 ? C.cashRisk2 : C.cashRisk3 }}>
+                            {r.pct}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
-
-          {/* ─── TAB 2: Congregations Status ─── */}
-          <TabsContent value="status">
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Congregation Status</CardTitle></CardHeader>
-              <CardContent>
-                <table className="w-full text-xs">
-                  <thead><tr className="border-b text-left text-muted-foreground">
-                    <th className="pb-2">Name</th><th className="pb-2">Code</th><th className="pb-2">Status</th><th className="pb-2">Pending</th><th className="pb-2">Action</th>
-                  </tr></thead>
-                  <tbody>
-                    {congStatuses.map(c => (
-                      <tr key={c.id} className="border-b last:border-0">
-                        <td className="py-2 font-medium">{c.name}</td>
-                        <td className="py-2">{c.code}</td>
-                        <td className="py-2"><Badge variant={c.status === "Draft" ? "outline" : c.status === "Submitted" ? "secondary" : "default"} className="text-[9px]">{c.status ?? "—"}</Badge></td>
-                        <td className="py-2">{c.pending > 0 ? <span className="text-orange-600 font-medium">{c.pending}</span> : "0"}</td>
-                        <td className="py-2">
-                          {c.status === "Draft" && c.periodId && <Button size="sm" className="h-6 text-[10px]" onClick={async () => { await supabase.from("cashbook_period").update({ status: "Submitted", submitted_at: new Date().toISOString() }).eq("id", c.periodId); await loadAll(); }}>Submit</Button>}
-                          {c.status === "Submitted" && <span className="text-xs text-muted-foreground">Awaiting audit</span>}
-                          {c.status === "AuditApproved" && <Badge variant="default" className="text-[9px]">Done</Badge>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between"><span>Total Cash</span><b>R {totalCash.toFixed(2)}</b></div>
+                    <div className="flex justify-between"><span>Total EFT/Debit</span><b>R {totalEFT.toFixed(2)}</b></div>
+                    <div className="flex justify-between border-t pt-1"><span>Eldership Total</span><b>R {eldershipTotal.toFixed(2)}</b></div>
+                    <div className="flex gap-2 mt-1">
+                      <span className="text-[10px] bg-orange-100 px-1 rounded">{eldershipTotal > 0 ? Math.round((totalCash/eldershipTotal)*100) : 0}%</span>
+                      <span className="text-[10px] bg-blue-100 px-1 rounded">{eldershipTotal > 0 ? Math.round((totalEFT/eldershipTotal)*100) : 0}%</span>
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
+          </div>
+        )}
 
-            {/* Monthly Close */}
-            <Card className="mt-3">
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Monthly Close</CardTitle></CardHeader>
-              <CardContent className="space-y-2">
-                <p className="text-xs">{readyCount} of {congStatuses.length} congregations ready</p>
-                <Button size="sm" onClick={handleSubmitToOverseer} disabled={!allReady || submitting}>{submitting ? "..." : "Submit All to Overseer"}</Button>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ─── TAB 3: Risk & Audit ─── */}
-          <TabsContent value="risk">
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Cash Risk — Missing Proofs (Top 3)</CardTitle></CardHeader>
-              <CardContent>
-                {cashRisks.length === 0 ? <p className="text-xs text-muted-foreground">No outstanding proof issues.</p> : (
-                  <table className="w-full text-xs">
-                    <thead><tr className="border-b text-left text-muted-foreground"><th className="pb-1">Officer</th><th className="pb-1">Type</th><th className="pb-1 text-right">Amount</th><th className="pb-1">Congregation</th></tr></thead>
-                    <tbody>{cashRisks.map((r, i) => (
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="py-1.5 font-medium">{r.officerCode}</td><td className="py-1.5">{r.paymentType}</td>
-                        <td className="py-1.5 text-right font-medium text-destructive">R{r.amount.toFixed(2)}</td><td className="py-1.5">{r.congregation}</td>
-                      </tr>
-                    ))}</tbody>
-                  </table>
+        {/* ─── TAB 4: RISK & AUDIT ─── */}
+        {activeTab === "risk" && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead><tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                <th className="px-3 py-2 text-left">Date</th><th className="px-2 py-2 text-left">Congregation</th>
+                <th className="px-2 py-2 text-left">Field</th><th className="px-2 py-2 text-left">Old</th>
+                <th className="px-2 py-2 text-left">New</th><th className="px-2 py-2 text-left">By</th>
+              </tr></thead>
+              <tbody>
+                {auditRows.length === 0 ? <tr><td colSpan={6} className="px-3 py-4 text-center text-muted-foreground">No audit events for this period.</td></tr> : (
+                  auditRows.map((r, i) => (
+                    <tr key={i} className="border-b">
+                      <td className="px-3 py-2">{r.date}</td><td className="px-2 py-2">{r.congregation}</td>
+                      <td className="px-2 py-2">{r.field}</td><td className="px-2 py-2">{r.oldVal}</td>
+                      <td className="px-2 py-2">{r.newVal}</td><td className="px-2 py-2">{r.by}</td>
+                    </tr>
+                  ))
                 )}
-              </CardContent>
-            </Card>
-
-            <Card className="mt-3">
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Expense Governance</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">Threshold: R{settings?.expense_approval_threshold ?? 500}</p>
-                <Button size="sm" variant="outline" className="mt-2" onClick={() => setShowSettings(true)}>Update Settings</Button>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-
-        {/* ═══ SETTINGS MODAL ═══ */}
-        {showSettings && settings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setShowSettings(false)} />
-            <Card className="relative z-10 w-full max-w-sm">
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Congregation Settings</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-1">
-                  <Label className="text-xs">Expense Approval Threshold (R)</Label>
-                  <Input type="number" className="h-9 text-xs" value={settings.expense_approval_threshold} onChange={e => setSettings({ ...settings, expense_approval_threshold: parseFloat(e.target.value) || 500 })} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">Require Proof for EFT/DD</Label>
-                  <button onClick={() => setSettings({ ...settings, proof_mandatory: !settings.proof_mandatory })} className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${settings.proof_mandatory ? "bg-primary" : "bg-muted"}`}>
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${settings.proof_mandatory ? "translate-x-4" : "translate-x-0.5"}`} />
-                  </button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">Allow Chair Submit on Behalf</Label>
-                  <button onClick={() => setSettings({ ...settings, allow_chair_submit: !settings.allow_chair_submit })} className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${settings.allow_chair_submit ? "bg-primary" : "bg-muted"}`}>
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${settings.allow_chair_submit ? "translate-x-4" : "translate-x-0.5"}`} />
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveSettings} disabled={saving}>{saving ? "..." : "Save"}</Button>
-                  <Button size="sm" variant="outline" onClick={() => setShowSettings(false)}>Cancel</Button>
-                </div>
-              </CardContent>
-            </Card>
+              </tbody>
+            </table>
           </div>
         )}
       </div>

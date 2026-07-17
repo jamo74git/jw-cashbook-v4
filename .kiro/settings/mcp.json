@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vercel": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@vercel/mcp-server"
+      ],
+      "disabled": false
+    }
+  }
+}
