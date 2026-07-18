@@ -23,7 +23,7 @@ interface LineItem { id: string; period_id: string; section: string; officer_id:
 interface Attachment { id: string; line_item_id: string; file_url: string; transaction_date: string | null; bank_reference: string | null; }
 interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; }
 type TabKey = "Members" | "Officers" | "Burial" | "Expenses" | "Banking";
-type FormState = { officerId: string; type: string; amount: string; ref: string; error: string };
+type FormState = { officerId: string; type: string; amount: string; ref: string; error: string; txnDate: string; txnRef: string; proofFile: File | null };
 
 const TABS: TabKey[] = ["Members", "Officers", "Burial", "Expenses", "Banking"];
 
@@ -90,11 +90,11 @@ export default function CapturePage() {
 
   // ── Isolated form state per tab ───────────────────────────────────────────
   const [forms, setForms] = useState<Record<TabKey, FormState>>({
-    Members: { officerId: "", type: "Cash", amount: "", ref: "", error: "" },
-    Officers: { officerId: "", type: "Cash", amount: "", ref: "", error: "" },
-    Burial: { officerId: "", type: "Cash", amount: "", ref: "", error: "" },
-    Expenses: { officerId: "", type: "Expense", amount: "", ref: "", error: "" },
-    Banking: { officerId: "", type: "", amount: "", ref: "", error: "" },
+    Members: { officerId: "", type: "Cash", amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null },
+    Officers: { officerId: "", type: "Cash", amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null },
+    Burial: { officerId: "", type: "Cash", amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null },
+    Expenses: { officerId: "", type: "Expense", amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null },
+    Banking: { officerId: "", type: "", amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null },
   });
   const form = forms[activeTab];
   const setForm = (p: Partial<FormState>) => setForms(prev => ({ ...prev, [activeTab]: { ...prev[activeTab], ...p } }));
@@ -107,9 +107,10 @@ export default function CapturePage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const role = access?.role as Role | undefined;
-  const isDraft = period?.status === "Draft";
-  const canEdit = !!(role && hasPermission(role, "capture.edit") && isDraft);
-  const canSubmit = !!(role && hasPermission(role, "capture.submit") && isDraft);
+  const isEditable = period?.status === "Draft" || period?.status === "Rejected";
+  const canEdit = !!(role && hasPermission(role, "capture.edit") && isEditable);
+  const canSubmit = !!(role && hasPermission(role, "capture.submit") && isEditable);
+  const isDraft = isEditable; // For UI display purposes
 
   useEffect(() => { const c = () => setIsMobile(window.innerWidth < 768); c(); window.addEventListener("resize", c); return () => window.removeEventListener("resize", c); }, []);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
@@ -191,7 +192,11 @@ export default function CapturePage() {
     if (activeTab === "Members" || activeTab === "Officers") {
       if (!form.officerId) return "Please select Officer before adding";
       if (!form.amount || isNaN(amt) || amt <= 0) return "Amount must be > 0";
-      if (PROOF_MANDATORY && ["EFT","DirectDeposit"].includes(form.type)) return "Proof of Payment is required (PROOF_MANDATORY=true)";
+      // EFT/DirectDeposit require date + proof
+      if (["EFT", "DirectDeposit"].includes(form.type)) {
+        if (!form.txnDate) return `${form.type === "EFT" ? "EFT Date" : "Deposit Date"} is required`;
+        if (PROOF_MANDATORY && !form.proofFile) return "Proof upload is required for EFT/DirectDeposit";
+      }
     }
     if (activeTab === "Burial") {
       if (!form.ref.trim()) return "Receipt Number is required";
@@ -222,7 +227,11 @@ export default function CapturePage() {
     const isOfficer = activeTab === "Officers";
     const itemType = activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expense" : form.type;
 
-    await supabase.from("cashbook_line_item").insert({
+    // Set transaction_date: for EFT/DD use form date, for Cash use today
+    const txnDate = ["EFT", "DirectDeposit"].includes(itemType) ? form.txnDate : new Date().toISOString().split("T")[0];
+
+    // Insert line item with transaction_date and proof_reference
+    const { data: newItem } = await supabase.from("cashbook_line_item").insert({
       period_id: period.id,
       section,
       is_officer: isOfficer,
@@ -233,17 +242,33 @@ export default function CapturePage() {
       receipt_number: activeTab === "Burial" ? form.ref.trim() : null,
       manual_reference: activeTab === "Expenses" ? form.ref.trim() : null,
       proof_status: null,
-    });
+      transaction_date: txnDate || null,
+      proof_reference: ["EFT", "DirectDeposit"].includes(itemType) ? (form.txnRef || null) : null,
+    }).select("id").single();
 
-    // Reset amount + ref (keep officer for rapid entry)
-    setForm({ amount: "", ref: "", error: "" });
+    // Upload proof if file provided (EFT/DD inline upload)
+    if (newItem && form.proofFile && ["EFT", "DirectDeposit"].includes(itemType)) {
+      const { data: { user } } = await supabase.auth.getUser();
+      const congId = access?.congregation_id ?? period.congregation_id;
+      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      const ext = form.proofFile.name.split(".").pop() ?? "jpg";
+      const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
+      await supabase.storage.from("cashbook_proofs").upload(storagePath, form.proofFile);
+      const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
+      await supabase.from("cashbook_attachment").insert({
+        line_item_id: newItem.id, file_url: u.publicUrl, uploaded_by: user?.id,
+        transaction_date: txnDate || null, bank_reference: form.txnRef || null, congregation_id: congId,
+      });
+      await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", newItem.id);
+    }
+
+    // Reset form (keep officer for rapid entry)
+    setForm({ amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null });
     if (form.officerId) setActiveOfficerId(form.officerId);
     await refetchItems();
 
-    // Auto-open proof modal for EFT/DD as a reminder (non-blocking)
-    if (["EFT","DirectDeposit"].includes(itemType) && !PROOF_MANDATORY) {
-      // We'd need the new item's ID. For now just show a toast reminder.
-      setToast("Remember to upload proof of payment for EFT/DD entries");
+    if (["EFT", "DirectDeposit"].includes(itemType) && !form.proofFile && !PROOF_MANDATORY) {
+      setToast("Reminder: Upload proof for EFT/DD entries");
     }
   }
 
