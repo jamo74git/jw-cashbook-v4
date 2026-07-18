@@ -35,20 +35,19 @@ export async function POST(request: NextRequest) {
 
     const { data: { user: callerUser } } = await supabase.auth.getUser();
     if (!callerUser) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized. Please log in again." }, { status: 401 });
     }
 
-    // Check caller has HO role
+    // Check caller has HO role (use admin client to bypass RLS)
     const { data: callerAccess } = await supabaseAdmin
       .from("user_hierarchy_access")
       .select("role")
       .eq("user_id", callerUser.id)
       .eq("status", "active")
-      .eq("role", "HO")
       .single();
 
-    if (!callerAccess) {
-      return NextResponse.json({ error: "Forbidden. Only HO can create users." }, { status: 403 });
+    if (!callerAccess || callerAccess.role !== "HO") {
+      return NextResponse.json({ error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none"}` }, { status: 403 });
     }
 
     // ── Step 1: Create auth user ────────────────────────────────────────────
