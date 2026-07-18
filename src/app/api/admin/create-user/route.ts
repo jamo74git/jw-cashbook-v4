@@ -31,16 +31,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Check caller has HO role (admin client bypasses RLS)
-    const { data: callerAccess } = await supabaseAdmin
+    const { data: callerAccess, error: accessQueryErr } = await supabaseAdmin
       .from("user_hierarchy_access")
-      .select("role")
+      .select("role, status, user_id")
       .eq("user_id", callerUser.id)
       .eq("status", "active")
       .limit(1)
       .maybeSingle();
 
     if (!callerAccess || callerAccess.role !== "HO") {
-      return NextResponse.json({ error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none (no active access record)"}` }, { status: 403 });
+      // Debug: fetch without status filter to see what's actually in the table
+      const { data: allRows } = await supabaseAdmin
+        .from("user_hierarchy_access")
+        .select("role, status, user_id")
+        .eq("user_id", callerUser.id);
+      return NextResponse.json({
+        error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none (no active access record)"}`,
+        debug: { userId: callerUser.id, email: callerUser.email, queryError: accessQueryErr?.message ?? null, allRowsForUser: allRows }
+      }, { status: 403 });
     }
 
     // ── Step 1: Create auth user ────────────────────────────────────────────
