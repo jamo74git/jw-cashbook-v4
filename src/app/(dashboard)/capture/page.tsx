@@ -412,7 +412,6 @@ export default function CapturePage() {
         <Badge variant={isDraft ? "outline" : "secondary"} className="text-[10px]">{period?.status}</Badge>
       </div>
 
-      {success && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800 mb-2">{success}</div>}
       {!isDraft && <div className="rounded border border-green-300 bg-green-100 p-3 text-xs text-green-900 font-medium mb-2">Submitted for Audit. All forms are locked.</div>}
       {toast && <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-blue-600 text-white px-4 py-2 rounded-md text-xs shadow-lg">{toast}</div>}
 
