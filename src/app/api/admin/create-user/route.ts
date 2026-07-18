@@ -1,14 +1,20 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
-// ── Admin Supabase client (service_role, bypasses RLS) ──────────────────────
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export async function POST(request: NextRequest) {
   try {
+    // Create admin client inside handler to ensure fresh env var read
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      return NextResponse.json({ error: "Server config error: SUPABASE_SERVICE_ROLE_KEY not set" }, { status: 500 });
+    }
+
+    const supabaseAdmin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceRoleKey,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
     const body = await request.json();
     const { email, password, role, congregation_id, hierarchy_id, scope_level } = body;
 
@@ -47,7 +53,14 @@ export async function POST(request: NextRequest) {
         .eq("user_id", callerUser.id);
       return NextResponse.json({
         error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none (no active access record)"}`,
-        debug: { userId: callerUser.id, email: callerUser.email, queryError: accessQueryErr?.message ?? null, allRowsForUser: allRows }
+        debug: {
+          userId: callerUser.id,
+          email: callerUser.email,
+          queryError: accessQueryErr?.message ?? null,
+          allRowsForUser: allRows,
+          keyPrefix: serviceRoleKey.substring(0, 10) + "...",
+          keyLength: serviceRoleKey.length,
+        }
       }, { status: 403 });
     }
 
