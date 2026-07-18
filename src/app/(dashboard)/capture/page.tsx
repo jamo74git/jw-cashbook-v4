@@ -231,7 +231,7 @@ export default function CapturePage() {
     const txnDate = ["EFT", "DirectDeposit"].includes(itemType) ? form.txnDate : new Date().toISOString().split("T")[0];
 
     // Insert line item with transaction_date and proof_reference
-    const { data: newItem } = await supabase.from("cashbook_line_item").insert({
+    const { data: newItem, error: insertErr } = await supabase.from("cashbook_line_item").insert({
       period_id: period.id,
       section,
       is_officer: isOfficer,
@@ -246,25 +246,30 @@ export default function CapturePage() {
       proof_reference: ["EFT", "DirectDeposit"].includes(itemType) ? (form.txnRef || null) : null,
     }).select("id").single();
 
-    // Upload proof if file provided (EFT/DD inline upload)
+    if (insertErr) { setToast(`Save failed: ${insertErr.message}`); return; }
+
+    // Upload proof if file provided (EFT/DD inline upload) — separate from insert
     if (newItem && form.proofFile && ["EFT", "DirectDeposit"].includes(itemType)) {
-      const { data: { user } } = await supabase.auth.getUser();
-      const congId = access?.congregation_id ?? period.congregation_id;
-      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-      const ext = form.proofFile.name.split(".").pop() ?? "jpg";
-      const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
-      await supabase.storage.from("cashbook_proofs").upload(storagePath, form.proofFile);
-      const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
-      await supabase.from("cashbook_attachment").insert({
-        line_item_id: newItem.id, file_url: u.publicUrl, uploaded_by: user?.id,
-        transaction_date: txnDate || null, bank_reference: form.txnRef || null, congregation_id: congId,
-      });
-      await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", newItem.id);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const congId = access?.congregation_id ?? period.congregation_id;
+        const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const ext = form.proofFile.name.split(".").pop() ?? "jpg";
+        const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
+        await supabase.storage.from("cashbook_proofs").upload(storagePath, form.proofFile);
+        const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
+        await supabase.from("cashbook_attachment").insert({
+          line_item_id: newItem.id, file_url: u.publicUrl, uploaded_by: user?.id,
+          transaction_date: txnDate || null, bank_reference: form.txnRef || null, congregation_id: congId,
+        });
+        await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", newItem.id);
+      } catch { /* Proof upload failed but line item is saved */ }
     }
 
-    // Reset form (keep officer for rapid entry)
+    // Reset form — keep officerId to maintain tally view
+    const keepOfficer = form.officerId;
     setForm({ amount: "", ref: "", error: "", txnDate: "", txnRef: "", proofFile: null });
-    if (form.officerId) setActiveOfficerId(form.officerId);
+    if (keepOfficer) setActiveOfficerId(keepOfficer);
     await refetchItems();
 
     if (["EFT", "DirectDeposit"].includes(itemType) && !form.proofFile && !PROOF_MANDATORY) {
@@ -435,8 +440,12 @@ export default function CapturePage() {
                   </div>
                   <div className="space-y-1">
                     <Label className="text-[10px] text-muted-foreground">Proof {PROOF_MANDATORY ? "*" : ""}</Label>
-                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-primary file:text-primary-foreground" onChange={e => setForm({ proofFile: e.target.files?.[0] ?? null })} />
-                    {form.proofFile && <p className="text-[10px] text-green-600 truncate">{form.proofFile.name}</p>}
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <span className={`text-lg ${form.proofFile ? "text-green-600" : "text-muted-foreground"}`}>{form.proofFile ? "📎" : "📎"}</span>
+                      {form.proofFile ? <span className="h-2 w-2 rounded-full bg-green-500" /> : <span className="h-2 w-2 rounded-full bg-destructive" />}
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={e => setForm({ proofFile: e.target.files?.[0] ?? null })} />
+                      <span className="text-[10px] text-muted-foreground">{form.proofFile ? "Attached" : "Attach"}</span>
+                    </label>
                   </div>
                 </div>
               )}
