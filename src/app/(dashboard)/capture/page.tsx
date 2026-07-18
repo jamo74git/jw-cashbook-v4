@@ -255,8 +255,21 @@ export default function CapturePage() {
     const isOfficer = activeTab === "Officers";
     const itemType = activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expense" : form.type;
 
-    // Set transaction_date: for EFT/DD use form date, for Cash use today
-    const txnDate = ["EFT", "DirectDebit"].includes(itemType) ? form.txnDate : new Date().toISOString().split("T")[0];
+    // Set transaction_date:
+    // - EFT/DD: from form date field (required)
+    // - Burial: forced to today (governance requirement)
+    // - Expenses: from form date field (user can pick)
+    // - Cash: today
+    let txnDate: string;
+    if (["EFT", "DirectDebit"].includes(itemType)) {
+      txnDate = form.txnDate;
+    } else if (itemType === "Burial") {
+      txnDate = new Date().toISOString().split("T")[0]; // forced today
+    } else if (itemType === "Expense") {
+      txnDate = form.txnDate || new Date().toISOString().split("T")[0]; // user picks or default today
+    } else {
+      txnDate = new Date().toISOString().split("T")[0]; // Cash = today
+    }
 
     // Insert line item with transaction_date and proof_reference
     const { data: newItem, error: insertErr } = await supabase.from("cashbook_line_item").insert({
@@ -446,7 +459,12 @@ export default function CapturePage() {
                   </select>
                 )}
                 {activeTab === "Burial" && <Input className="h-9 text-xs" placeholder="Receipt Number *" value={form.ref} onChange={e => setForm({ ref: e.target.value, error: "" })} />}
-                {activeTab === "Expenses" && <Input className="h-9 text-xs" placeholder="Description *" value={form.ref} onChange={e => setForm({ ref: e.target.value, error: "" })} />}
+                {activeTab === "Expenses" && (
+                  <div className="flex gap-2 flex-1">
+                    <Input className="h-9 text-xs flex-1" placeholder="Description *" value={form.ref} onChange={e => setForm({ ref: e.target.value, error: "" })} />
+                    <Input type="date" className="h-9 text-xs w-36" value={form.txnDate} onChange={e => setForm({ txnDate: e.target.value })} title="Expense date" />
+                  </div>
+                )}
                 {(activeTab === "Members" || activeTab === "Officers") && (
                   <select className="h-9 w-28 rounded border border-input bg-background px-2 text-xs" value={form.type} onChange={e => setForm({ type: e.target.value })}>
                     <option value="EFT">EFT</option><option value="Cash">Cash</option><option value="DirectDebit">Direct Deposit</option>
