@@ -111,8 +111,7 @@ export default function CreateUserPage() {
     setCreating(false);
 
     if (!res.ok) {
-      // Show full response for debugging
-      setError(data.debug ? `${data.error}\n\nDEBUG: ${JSON.stringify(data.debug, null, 2)}` : (data.error ?? "Failed to create user"));
+      setError(data.error ?? "Failed to create user");
       return;
     }
 
@@ -139,7 +138,7 @@ export default function CreateUserPage() {
         </div>
 
         {success && <div className="rounded border border-green-300 bg-green-50 p-3 text-xs text-green-800">{success}</div>}
-        {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive whitespace-pre-wrap break-all">{error}</div>}
+        {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive">{error}</div>}
 
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-sm">New User Details</CardTitle></CardHeader>

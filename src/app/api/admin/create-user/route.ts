@@ -9,13 +9,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Server config error: SUPABASE_SERVICE_ROLE_KEY not set" }, { status: 500 });
     }
 
-    // Decode JWT payload to verify it's actually the service_role key
-    let keyRole = "unknown";
-    try {
-      const payload = JSON.parse(Buffer.from(serviceRoleKey.split(".")[1], "base64").toString());
-      keyRole = payload.role ?? "no role claim";
-    } catch { keyRole = "decode failed"; }
-
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       serviceRoleKey,
@@ -44,32 +37,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Check caller has HO role (admin client bypasses RLS)
-    const { data: callerAccess, error: accessQueryErr } = await supabaseAdmin
+    const { data: callerAccess } = await supabaseAdmin
       .from("user_hierarchy_access")
-      .select("role, status, user_id")
+      .select("role")
       .eq("user_id", callerUser.id)
       .eq("status", "active")
       .limit(1)
       .maybeSingle();
 
     if (!callerAccess || callerAccess.role !== "HO") {
-      // Debug: fetch without status filter to see what's actually in the table
-      const { data: allRows } = await supabaseAdmin
-        .from("user_hierarchy_access")
-        .select("role, status, user_id")
-        .eq("user_id", callerUser.id);
-      return NextResponse.json({
-        error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none (no active access record)"}`,
-        debug: {
-          userId: callerUser.id,
-          email: callerUser.email,
-          queryError: accessQueryErr?.message ?? null,
-          allRowsForUser: allRows,
-          keyPrefix: serviceRoleKey.substring(0, 10) + "...",
-          keyLength: serviceRoleKey.length,
-          keyRole: keyRole,
-        }
-      }, { status: 403 });
+      return NextResponse.json({ error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none"}` }, { status: 403 });
     }
 
     // ── Step 1: Create auth user ────────────────────────────────────────────
