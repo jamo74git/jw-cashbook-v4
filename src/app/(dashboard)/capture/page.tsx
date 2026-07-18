@@ -293,7 +293,8 @@ export default function CapturePage() {
     const { data: { user } } = await supabase.auth.getUser();
     const congId = access?.congregation_id ?? period.congregation_id;
     const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-    const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.jpg`;
+    const ext = proofFile.name.split(".").pop() ?? "jpg";
+    const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
 
     await supabase.storage.from("cashbook_proofs").upload(storagePath, proofFile);
     const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
