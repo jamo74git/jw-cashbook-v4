@@ -285,8 +285,8 @@ export default function CapturePage() {
         const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
         const ext = compressed.name.split(".").pop() ?? "jpg";
         const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
-        await supabase.storage.from("cashbook_proofs").upload(storagePath, compressed);
-        const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
+        await supabase.storage.from("cashbook-proofs").upload(storagePath, compressed);
+        const { data: u } = supabase.storage.from("cashbook-proofs").getPublicUrl(storagePath);
         await supabase.from("cashbook_attachment").insert({
           line_item_id: newItem.id, file_url: u.publicUrl, uploaded_by: user?.id,
           transaction_date: txnDate || null, bank_reference: form.txnRef || null, congregation_id: congId,
@@ -326,8 +326,8 @@ export default function CapturePage() {
     const ext = compressed.name.split(".").pop() ?? "jpg";
     const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
 
-    await supabase.storage.from("cashbook_proofs").upload(storagePath, compressed);
-    const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
+    await supabase.storage.from("cashbook-proofs").upload(storagePath, compressed);
+    const { data: u } = supabase.storage.from("cashbook-proofs").getPublicUrl(storagePath);
 
     await supabase.from("cashbook_attachment").insert({
       line_item_id: itemId,
