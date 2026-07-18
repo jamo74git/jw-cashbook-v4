@@ -13,11 +13,12 @@ export const metadata: Metadata = {
   title: "Sign in - OAC Management System",
 };
 
-export default function LoginPage({
+export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: { error?: string };
+  searchParams: Promise<{ error?: string }>;
 }) {
+  const params = await searchParams;
   return (
     <main className="min-h-screen flex items-center justify-center bg-muted/40 px-4 py-12">
       <div className="w-full max-w-sm space-y-6">
@@ -28,9 +29,9 @@ export default function LoginPage({
           </p>
         </div>
 
-        {searchParams.error && (
+        {params.error && (
           <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3">
-            <p className="text-sm text-destructive">{searchParams.error}</p>
+            <p className="text-sm text-destructive">{params.error}</p>
           </div>
         )}
 
