@@ -422,6 +422,24 @@ export default function CapturePage() {
                 </div>
                 <Button size="sm" className="h-9 text-xs" onClick={handleAddCapture} disabled={!!getValidationError()}>+ Add</Button>
               </div>
+              {/* Inline EFT/DD fields: Date (required), Reference (optional), Proof (required per settings) */}
+              {(activeTab === "Members" || activeTab === "Officers") && ["EFT", "DirectDeposit"].includes(form.type) && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 pt-2 border-t">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">{form.type === "EFT" ? "EFT Date *" : "Deposit Date *"}</Label>
+                    <Input type="date" className="h-8 text-xs" value={form.txnDate} onChange={e => setForm({ txnDate: e.target.value, error: "" })} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">{form.type === "EFT" ? "EFT Ref" : "Deposit Slip #"}</Label>
+                    <Input className="h-8 text-xs" placeholder="Optional" value={form.txnRef} onChange={e => setForm({ txnRef: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Proof {PROOF_MANDATORY ? "*" : ""}</Label>
+                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="text-[10px] file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-primary file:text-primary-foreground" onChange={e => setForm({ proofFile: e.target.files?.[0] ?? null })} />
+                    {form.proofFile && <p className="text-[10px] text-green-600 truncate">{form.proofFile.name}</p>}
+                  </div>
+                </div>
+              )}
               {form.error && <p className="text-destructive text-[11px] mt-1">{form.error}</p>}
             </div>
           )}
