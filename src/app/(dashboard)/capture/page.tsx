@@ -426,11 +426,12 @@ export default function CapturePage() {
         ))}
       </div>
 
-      {/* Running Totals Banner (Members/Officers only) */}
-      {(activeTab === "Members" || activeTab === "Officers") && (
+      {/* Running Totals Banner (Members/Officers/Burial/Expenses — not Banking) */}
+      {activeTab !== "Banking" && (
         <div className="grid grid-cols-3 gap-2 mb-3">
           {["EFT", "DirectDebit", "Cash"].map(t => {
-            const filtered = tabItems(activeTab).filter(i => i.item_type === t);
+            // Always show totals across Members + Officers (income items)
+            const filtered = items.filter(i => ["Members","Officers"].includes(i.section) && i.item_type === t);
             return (
               <Card key={t} className="bg-blue-50 border-blue-200">
                 <CardContent className="py-2 px-3 text-center">
