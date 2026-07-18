@@ -590,7 +590,7 @@ export default function CapturePage() {
                           <td className="py-1.5 pr-2">{off?.officer_code ?? "—"}</td>
                           <td className="py-1.5"><ProofBtn item={item} /></td>
                         </tr>); })}
-                      <tr className="bg-muted/30 font-medium"><td colSpan={2} className="py-1 text-[10px]">Subtotal {label}</td><td className="py-1 text-right">R{groupItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
+                      <tr className="bg-muted/50 font-bold border-t"><td colSpan={2} className="py-1.5 pl-2 text-[11px]">Subtotal {label}</td><td className="py-1.5 text-right text-[11px]">R{groupItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
                     </>);
                     return (
                       <table className="w-full text-xs">
@@ -692,7 +692,11 @@ export default function CapturePage() {
               {missingProofs.length > 0 && <p className="text-destructive text-[10px] mt-1">{missingProofs.length} proof(s) missing</p>}
             </CardContent>
           </Card>
-          <div className="w-full"><Badge variant={period?.status === "AuditApproved" ? "default" : "outline"} className="text-[10px] w-full justify-center py-1">{period?.status}</Badge></div>
+          <div className="w-full rounded-md bg-muted py-2 text-center">
+            <span className={`text-xs font-bold ${period?.status === "AuditApproved" ? "text-green-700" : period?.status === "Submitted" ? "text-orange-700" : "text-muted-foreground"}`}>
+              {period?.status === "Draft" || period?.status === "Rejected" ? "⬤ Draft — Capture in Progress" : period?.status}
+            </span>
+          </div>
         </div>
       </div>
 
