@@ -566,27 +566,100 @@ export default function CapturePage() {
           {/* Banking Tab (read-only) */}
           {activeTab === "Banking" && (
             <div className="space-y-4">
-              <Card><CardHeader className="pb-2"><CardTitle className="text-xs">Banking Detail</CardTitle></CardHeader><CardContent>
-                {tabItems("Banking").length === 0 ? <p className="text-xs text-muted-foreground">No banked items.</p> : (
-                  <table className="w-full text-xs"><thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1">Date</th><th className="pb-1">Type</th><th className="pb-1 text-right">Amount</th><th className="pb-1">Officer</th><th className="pb-1">Proof</th></tr></thead><tbody>
-                    {tabItems("Banking").map(item => { const att = getAtt(item.id); const off = officers.find(o => o.id === item.officer_id); return (
-                      <tr key={item.id} className="border-b last:border-0">
-                        <td className="py-1">{att?.transaction_date ?? "—"}</td>
-                        <td className="py-1">{item.item_type}</td>
-                        <td className="py-1 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                        <td className="py-1 truncate max-w-[100px]">{off ? off.officer_code : "—"}</td>
-                        <td className="py-1">{att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600">📷</a> : "✗"}</td>
-                      </tr>); })}
-                  </tbody></table>)}
-              </CardContent></Card>
-              <Card><CardHeader className="pb-2"><CardTitle className="text-xs">Cash Pending</CardTitle></CardHeader><CardContent>
-                {items.filter(i => ["Cash","CashPending"].includes(i.item_type)).length === 0 ? <p className="text-xs text-muted-foreground">All cash banked.</p> : (
-                  <div className="space-y-1">{items.filter(i => ["Cash","CashPending"].includes(i.item_type)).map(item => (
-                    <div key={item.id} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
-                      <span className="flex-1">{officers.find(o=>o.id===item.officer_id)?.officer_code ?? "Cash"} — R{Number(item.amount).toFixed(2)}</span>
-                      <Button size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => setProofModal({ itemId: item.id, type: "CashPending" })} disabled={!canEdit}>Mark Banked</Button>
-                    </div>))}</div>)}
-              </CardContent></Card>
+              {/* Electronic Banking Detail — sorted by type then officer */}
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-xs">Banking Detail</CardTitle></CardHeader>
+                <CardContent>
+                  {tabItems("Banking").length === 0 ? <p className="text-xs text-muted-foreground">No electronic banking items.</p> : (() => {
+                    const bankingItems = [...tabItems("Banking")].sort((a, b) => {
+                      const typeOrder = (t: string) => t === "DirectDebit" ? 0 : t === "EFT" ? 1 : 2;
+                      if (typeOrder(a.item_type) !== typeOrder(b.item_type)) return typeOrder(a.item_type) - typeOrder(b.item_type);
+                      const aOff = officers.find(o => o.id === a.officer_id)?.officer_code ?? "zzz";
+                      const bOff = officers.find(o => o.id === b.officer_id)?.officer_code ?? "zzz";
+                      return aOff.localeCompare(bOff);
+                    });
+                    const ddItems = bankingItems.filter(i => i.item_type === "DirectDebit");
+                    const eftItems = bankingItems.filter(i => i.item_type === "EFT");
+                    const cbItems = bankingItems.filter(i => i.item_type === "CashBanked");
+                    const renderGroup = (groupItems: typeof bankingItems, label: string) => groupItems.length === 0 ? null : (<>
+                      {groupItems.map(item => { const att = getAtt(item.id); const off = officers.find(o => o.id === item.officer_id); return (
+                        <tr key={item.id} className="border-b last:border-0">
+                          <td className="py-1.5 pr-2">{att?.transaction_date ?? "—"}</td>
+                          <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
+                          <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                          <td className="py-1.5 pr-2">{off?.officer_code ?? "—"}</td>
+                          <td className="py-1.5"><ProofBtn item={item} /></td>
+                        </tr>); })}
+                      <tr className="bg-muted/30 font-medium"><td colSpan={2} className="py-1 text-[10px]">Subtotal {label}</td><td className="py-1 text-right">R{groupItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
+                    </>);
+                    return (
+                      <table className="w-full text-xs">
+                        <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Date on Proof</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Officer</th><th className="pb-1">Proof</th></tr></thead>
+                        <tbody>
+                          {renderGroup(ddItems, "Direct Debit")}
+                          {renderGroup(eftItems, "EFT")}
+                          {renderGroup(cbItems, "Cash Banked")}
+                          <tr className="font-bold border-t"><td colSpan={2} className="py-2">TOTAL</td><td className="py-2 text-right">R{bankingItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
+                        </tbody>
+                      </table>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+
+              {/* Cash Pending — single total with one Mark Banked button */}
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-xs">Cash Pending</CardTitle></CardHeader>
+                <CardContent>
+                  {(() => {
+                    const cashItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type));
+                    const cashTotal = cashItems.reduce((s, i) => s + Number(i.amount), 0);
+                    if (cashItems.length === 0) return <p className="text-xs text-green-600 font-medium">All cash banked ✓</p>;
+                    // Check if already marked as banked (all have proof)
+                    const allBanked = cashItems.every(i => hasProof(i.id));
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-bold">Amount to be Banked: R{cashTotal.toFixed(2)}</p>
+                            <p className="text-[10px] text-muted-foreground">{cashItems.length} cash {cashItems.length === 1 ? "entry" : "entries"}</p>
+                          </div>
+                          {allBanked ? (
+                            <span className="inline-flex items-center gap-1 text-green-600 text-xs font-medium">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                              Cash Banked
+                            </span>
+                          ) : (
+                            <label className="inline-flex items-center gap-2 cursor-pointer">
+                              <Button size="sm" variant="outline" className="h-8 text-xs" disabled={!canEdit} asChild>
+                                <span>Mark Banked</span>
+                              </Button>
+                              <input type="file" accept="image/*,.pdf" className="hidden" disabled={!canEdit} onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file || !period) return;
+                                const compressed = await compressImage(file);
+                                const { data: { user } } = await supabase.auth.getUser();
+                                const congId = access?.congregation_id ?? period.congregation_id;
+                                const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+                                const ext = compressed.name.split(".").pop() ?? "jpg";
+                                const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-deposit-slip.${ext}`;
+                                await supabase.storage.from("cashbook-proofs").upload(storagePath, compressed);
+                                const { data: u } = supabase.storage.from("cashbook-proofs").getPublicUrl(storagePath);
+                                // Attach proof to ALL cash items and mark them as CashBanked
+                                for (const ci of cashItems) {
+                                  await supabase.from("cashbook_attachment").insert({ line_item_id: ci.id, file_url: u.publicUrl, uploaded_by: user?.id, congregation_id: congId, transaction_date: new Date().toISOString().split("T")[0] });
+                                  await supabase.from("cashbook_line_item").update({ item_type: "CashBanked", payment_type: "CashBanked", proof_status: "uploaded" }).eq("id", ci.id);
+                                }
+                                await refetchItems();
+                              }} />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>
@@ -615,10 +688,11 @@ export default function CapturePage() {
               <div className="flex justify-between"><span>Burial</span><b>R{burialT.toFixed(2)}</b></div>
               <div className="flex justify-between border-t pt-1 font-bold"><span>Income</span><span>R{grandIncome.toFixed(2)}</span></div>
               <div className="flex justify-between text-muted-foreground"><span>Expenses</span><span>R{expensesT.toFixed(2)}</span></div>
-              <div className="mt-2"><Badge variant={period?.status === "AuditApproved" ? "default" : "outline"} className="text-[10px]">{period?.status}</Badge></div>
+              <div className="flex justify-between border-t pt-1 font-bold text-primary"><span>Grand Total</span><span>R{(grandIncome - expensesT).toFixed(2)}</span></div>
               {missingProofs.length > 0 && <p className="text-destructive text-[10px] mt-1">{missingProofs.length} proof(s) missing</p>}
             </CardContent>
           </Card>
+          <div className="w-full"><Badge variant={period?.status === "AuditApproved" ? "default" : "outline"} className="text-[10px] w-full justify-center py-1">{period?.status}</Badge></div>
         </div>
       </div>
 
