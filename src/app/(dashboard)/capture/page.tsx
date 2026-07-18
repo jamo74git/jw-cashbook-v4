@@ -59,7 +59,7 @@ function getCurrentWeekKey(): { year: number; month: number; weekKey: string } {
   return { year: y, month: m, weekKey: current?.weekKey ?? `${y}-${String(m).padStart(2,"0")}-W1` };
 }
 
-function needsProof(item: LineItem): boolean { return ["EFT","DirectDeposit","Burial","Expense"].includes(item.item_type); }
+function needsProof(item: LineItem): boolean { return ["EFT","DirectDebit","Burial","Expense"].includes(item.item_type); }
 function officerLabel(o: Officer): string { return `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}`; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -160,7 +160,7 @@ export default function CapturePage() {
     const { data: li } = await supabase.from("cashbook_line_item").select("*").eq("period_id", pid);
     // Filter orphans: Members/Officers must have officer_id
     const valid = (li ?? []).filter((i: LineItem) =>
-      !(i.officer_id === null && ["EFT","Cash","DirectDeposit"].includes(i.item_type) && ["Members","Officers"].includes(i.section))
+      !(i.officer_id === null && ["EFT","Cash","DirectDebit"].includes(i.item_type) && ["Members","Officers"].includes(i.section))
     );
     setItems(valid);
     const ids = new Set(valid.map((i: LineItem) => i.id));
@@ -179,7 +179,7 @@ export default function CapturePage() {
       case "Officers": return items.filter(i => i.section === "Officers" && i.is_officer);
       case "Burial": return items.filter(i => i.item_type === "Burial");
       case "Expenses": return items.filter(i => i.item_type === "Expense");
-      case "Banking": return items.filter(i => ["EFT","DirectDeposit","CashBanked"].includes(i.item_type));
+      case "Banking": return items.filter(i => ["EFT","DirectDebit","CashBanked"].includes(i.item_type));
       default: return [];
     }
   }
@@ -193,9 +193,9 @@ export default function CapturePage() {
       if (!form.officerId) return "Please select Officer before adding";
       if (!form.amount || isNaN(amt) || amt <= 0) return "Amount must be > 0";
       // EFT/DirectDeposit require date + proof
-      if (["EFT", "DirectDeposit"].includes(form.type)) {
+      if (["EFT", "DirectDebit"].includes(form.type)) {
         if (!form.txnDate) return `${form.type === "EFT" ? "EFT Date" : "Deposit Date"} is required`;
-        if (PROOF_MANDATORY && !form.proofFile) return "Proof upload is required for EFT/DirectDeposit";
+        if (PROOF_MANDATORY && !form.proofFile) return "Proof upload is required for EFT/Direct Deposit";
       }
     }
     if (activeTab === "Burial") {
@@ -228,7 +228,7 @@ export default function CapturePage() {
     const itemType = activeTab === "Burial" ? "Burial" : activeTab === "Expenses" ? "Expense" : form.type;
 
     // Set transaction_date: for EFT/DD use form date, for Cash use today
-    const txnDate = ["EFT", "DirectDeposit"].includes(itemType) ? form.txnDate : new Date().toISOString().split("T")[0];
+    const txnDate = ["EFT", "DirectDebit"].includes(itemType) ? form.txnDate : new Date().toISOString().split("T")[0];
 
     // Insert line item with transaction_date and proof_reference
     const { data: newItem, error: insertErr } = await supabase.from("cashbook_line_item").insert({
@@ -243,13 +243,13 @@ export default function CapturePage() {
       manual_reference: activeTab === "Expenses" ? form.ref.trim() : null,
       proof_status: null,
       transaction_date: txnDate || null,
-      proof_reference: ["EFT", "DirectDeposit"].includes(itemType) ? (form.txnRef || null) : null,
+      proof_reference: ["EFT", "DirectDebit"].includes(itemType) ? (form.txnRef || null) : null,
     }).select("id").single();
 
     if (insertErr) { setToast(`Save failed: ${insertErr.message}`); return; }
 
     // Upload proof if file provided (EFT/DD inline upload) — separate from insert
-    if (newItem && form.proofFile && ["EFT", "DirectDeposit"].includes(itemType)) {
+    if (newItem && form.proofFile && ["EFT", "DirectDebit"].includes(itemType)) {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         const congId = access?.congregation_id ?? period.congregation_id;
@@ -272,7 +272,7 @@ export default function CapturePage() {
     if (keepOfficer) setActiveOfficerId(keepOfficer);
     await refetchItems();
 
-    if (["EFT", "DirectDeposit"].includes(itemType) && !form.proofFile && !PROOF_MANDATORY) {
+    if (["EFT", "DirectDebit"].includes(itemType) && !form.proofFile && !PROOF_MANDATORY) {
       setToast("Reminder: Upload proof for EFT/DD entries");
     }
   }
@@ -287,7 +287,7 @@ export default function CapturePage() {
   async function saveProof() {
     if (!proofModal || !proofFile || !period || !canEdit) return;
     const { itemId, type } = proofModal;
-    if (["EFT","DirectDeposit","Cash","CashPending"].includes(type) && !proofDate) return;
+    if (["EFT","DirectDebit","Cash","CashPending"].includes(type) && !proofDate) return;
 
     // Build storage path: {congregation_id}/{year}/{month}/{service}_{week_key}/{user_id}/{timestamp}-proof.jpg
     const { data: { user } } = await supabase.auth.getUser();
@@ -385,12 +385,12 @@ export default function CapturePage() {
       {/* Running Totals Banner (Members/Officers only) */}
       {(activeTab === "Members" || activeTab === "Officers") && (
         <div className="grid grid-cols-3 gap-2 mb-3">
-          {["EFT", "DirectDeposit", "Cash"].map(t => {
+          {["EFT", "DirectDebit", "Cash"].map(t => {
             const filtered = tabItems(activeTab).filter(i => i.item_type === t);
             return (
               <Card key={t} className="bg-blue-50 border-blue-200">
                 <CardContent className="py-2 px-3 text-center">
-                  <p className="text-[10px] uppercase text-blue-600 font-medium">{t === "DirectDeposit" ? "Direct Deposit" : t}</p>
+                  <p className="text-[10px] uppercase text-blue-600 font-medium">{t === "DirectDebit" ? "Direct Deposit" : t}</p>
                   <p className="text-sm font-bold text-blue-900">R{filtered.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</p>
                   <p className="text-[10px] text-blue-500">{filtered.length} {filtered.length === 1 ? "entry" : "entries"}</p>
                 </CardContent>
@@ -418,7 +418,7 @@ export default function CapturePage() {
                 {activeTab === "Expenses" && <Input className="h-9 text-xs" placeholder="Description *" value={form.ref} onChange={e => setForm({ ref: e.target.value, error: "" })} />}
                 {(activeTab === "Members" || activeTab === "Officers") && (
                   <select className="h-9 w-28 rounded border border-input bg-background px-2 text-xs" value={form.type} onChange={e => setForm({ type: e.target.value })}>
-                    <option value="EFT">EFT</option><option value="Cash">Cash</option><option value="DirectDeposit">DirectDeposit</option>
+                    <option value="EFT">EFT</option><option value="Cash">Cash</option><option value="DirectDebit">Direct Deposit</option>
                   </select>
                 )}
                 <div className="relative w-28">
@@ -428,7 +428,7 @@ export default function CapturePage() {
                 <Button size="sm" className="h-9 text-xs" onClick={handleAddCapture} disabled={!!getValidationError()}>+ Add</Button>
               </div>
               {/* Inline EFT/DD fields: Date (required), Reference (optional), Proof (required per settings) */}
-              {(activeTab === "Members" || activeTab === "Officers") && ["EFT", "DirectDeposit"].includes(form.type) && (
+              {(activeTab === "Members" || activeTab === "Officers") && ["EFT", "DirectDebit"].includes(form.type) && (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 pt-2 border-t">
                   <div className="space-y-1">
                     <Label className="text-[10px] text-muted-foreground">{form.type === "EFT" ? "EFT Date *" : "Deposit Date *"}</Label>
@@ -550,7 +550,7 @@ export default function CapturePage() {
               <p className="font-bold text-sm">INCOME: R{grandIncome.toFixed(2)}</p>
               <div className="pl-2 space-y-0.5 text-muted-foreground">
                 <p>EFT: R{sumType("EFT").toFixed(2)} ({items.filter(i=>i.item_type==="EFT").length})</p>
-                <p>DD: R{sumType("DirectDeposit").toFixed(2)} ({items.filter(i=>i.item_type==="DirectDeposit").length})</p>
+                <p>DD: R{sumType("DirectDebit").toFixed(2)} ({items.filter(i=>i.item_type==="DirectDebit").length})</p>
                 <p>Cash Pending: R{(sumType("Cash")+sumType("CashPending")).toFixed(2)}</p>
                 <p>Cash Banked: R{sumType("CashBanked").toFixed(2)}</p>
               </div>
@@ -598,13 +598,13 @@ export default function CapturePage() {
           <Card className="relative z-10 w-full max-w-sm">
             <CardHeader className="pb-2"><CardTitle className="text-sm">{["Cash","CashPending"].includes(proofModal.type) ? "Mark Cash as Banked" : "Upload Proof"}</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              {["EFT","DirectDeposit","Cash","CashPending"].includes(proofModal.type) && (<>
+              {["EFT","DirectDebit","Cash","CashPending"].includes(proofModal.type) && (<>
                 <div className="space-y-1"><Label className="text-xs">{["Cash","CashPending"].includes(proofModal.type) ? "Deposit Date *" : "Proof Date *"}</Label><Input type="date" className="h-9 text-xs" value={proofDate} onChange={e => setProofDate(e.target.value)} /></div>
                 <div className="space-y-1"><Label className="text-xs">Bank Ref</Label><Input className="h-9 text-xs" value={proofBankRef} onChange={e => setProofBankRef(e.target.value)} /></div>
               </>)}
               <div className="space-y-1"><Label className="text-xs">Photo *</Label><input type="file" accept="image/*" capture={isMobile ? "environment" : undefined} className="text-xs" onChange={e => setProofFile(e.target.files?.[0] ?? null)} /></div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={saveProof} disabled={!proofFile || (["EFT","DirectDeposit","Cash","CashPending"].includes(proofModal.type) && !proofDate)}>{["Cash","CashPending"].includes(proofModal.type) ? "Mark Banked" : "Save"}</Button>
+                <Button size="sm" onClick={saveProof} disabled={!proofFile || (["EFT","DirectDebit","Cash","CashPending"].includes(proofModal.type) && !proofDate)}>{["Cash","CashPending"].includes(proofModal.type) ? "Mark Banked" : "Save"}</Button>
                 <Button size="sm" variant="outline" onClick={() => setProofModal(null)}>Cancel</Button>
               </div>
             </CardContent>
