@@ -9,6 +9,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Server config error: SUPABASE_SERVICE_ROLE_KEY not set" }, { status: 500 });
     }
 
+    // Decode JWT payload to verify it's actually the service_role key
+    let keyRole = "unknown";
+    try {
+      const payload = JSON.parse(Buffer.from(serviceRoleKey.split(".")[1], "base64").toString());
+      keyRole = payload.role ?? "no role claim";
+    } catch { keyRole = "decode failed"; }
+
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       serviceRoleKey,
@@ -60,6 +67,7 @@ export async function POST(request: NextRequest) {
           allRowsForUser: allRows,
           keyPrefix: serviceRoleKey.substring(0, 10) + "...",
           keyLength: serviceRoleKey.length,
+          keyRole: keyRole,
         }
       }, { status: 403 });
     }
