@@ -62,6 +62,34 @@ function getCurrentWeekKey(): { year: number; month: number; weekKey: string } {
 function needsProof(item: LineItem): boolean { return ["EFT","DirectDebit","Burial","Expense"].includes(item.item_type); }
 function officerLabel(o: Officer): string { return `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}`; }
 
+// ── Client-side image compression (no dependencies) ─────────────────────────
+// Resizes to max 1920px and compresses to 80% JPEG quality
+// Typical result: 5-8MB phone photo → 200-400KB
+async function compressImage(file: File, maxWidth = 1920, quality = 0.8): Promise<File> {
+  // Skip if not an image or already small
+  if (!file.type.startsWith("image/") || file.size < 500000) return file;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let { width, height } = img;
+      if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx?.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => { resolve(blob ? new File([blob], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" }) : file); },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => resolve(file); // fallback: use original
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -253,10 +281,11 @@ export default function CapturePage() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         const congId = access?.congregation_id ?? period.congregation_id;
+        const compressed = await compressImage(form.proofFile);
         const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-        const ext = form.proofFile.name.split(".").pop() ?? "jpg";
+        const ext = compressed.name.split(".").pop() ?? "jpg";
         const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
-        await supabase.storage.from("cashbook_proofs").upload(storagePath, form.proofFile);
+        await supabase.storage.from("cashbook_proofs").upload(storagePath, compressed);
         const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
         await supabase.from("cashbook_attachment").insert({
           line_item_id: newItem.id, file_url: u.publicUrl, uploaded_by: user?.id,
@@ -289,14 +318,15 @@ export default function CapturePage() {
     const { itemId, type } = proofModal;
     if (["EFT","DirectDebit","Cash","CashPending"].includes(type) && !proofDate) return;
 
-    // Build storage path: {congregation_id}/{year}/{month}/{service}_{week_key}/{user_id}/{timestamp}-proof.jpg
+    // Build storage path + compress image
     const { data: { user } } = await supabase.auth.getUser();
     const congId = access?.congregation_id ?? period.congregation_id;
+    const compressed = await compressImage(proofFile);
     const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-    const ext = proofFile.name.split(".").pop() ?? "jpg";
+    const ext = compressed.name.split(".").pop() ?? "jpg";
     const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
 
-    await supabase.storage.from("cashbook_proofs").upload(storagePath, proofFile);
+    await supabase.storage.from("cashbook_proofs").upload(storagePath, compressed);
     const { data: u } = supabase.storage.from("cashbook_proofs").getPublicUrl(storagePath);
 
     await supabase.from("cashbook_attachment").insert({
