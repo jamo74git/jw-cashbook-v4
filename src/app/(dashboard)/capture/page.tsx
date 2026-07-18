@@ -666,8 +666,37 @@ export default function CapturePage() {
   // ── ProofBtn ──────────────────────────────────────────────────────────────
   function ProofBtn({ item }: { item: LineItem }) {
     const att = getAtt(item.id);
-    if (att) return <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600 text-sm">📷</a>;
+    // Already attached → green paperclip, click to view
+    if (att) return (
+      <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-green-600" title="View proof">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+        <span className="text-[10px] font-medium">Attached</span>
+      </a>
+    );
+    // Not required → dash
     if (!needsProof(item)) return <span className="text-muted-foreground text-[10px]">—</span>;
-    return <button className="relative text-sm" onClick={() => setProofModal({ itemId: item.id, type: item.item_type })} disabled={!canEdit}>📷<span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-destructive" /></button>;
+    // Needs proof → paperclip with red dot, opens file picker directly
+    return (
+      <label className="inline-flex items-center gap-1 cursor-pointer relative" title="Attach proof">
+        <svg className="w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+        <span className="absolute -top-0.5 -left-0.5 h-2 w-2 rounded-full bg-destructive" />
+        <span className="text-[10px] text-muted-foreground">Attach</span>
+        <input type="file" accept="image/*,.pdf" className="hidden" disabled={!canEdit} onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file || !period) return;
+          const compressed = await compressImage(file);
+          const { data: { user } } = await supabase.auth.getUser();
+          const congId = access?.congregation_id ?? period.congregation_id;
+          const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+          const ext = compressed.name.split(".").pop() ?? "jpg";
+          const storagePath = `${congId}/${period.year}/${String(period.month).padStart(2,"0")}/${period.service}_${period.week_key ?? period.week}/${user?.id}/${ts}-proof.${ext}`;
+          await supabase.storage.from("cashbook-proofs").upload(storagePath, compressed);
+          const { data: u } = supabase.storage.from("cashbook-proofs").getPublicUrl(storagePath);
+          await supabase.from("cashbook_attachment").insert({ line_item_id: item.id, file_url: u.publicUrl, uploaded_by: user?.id, congregation_id: congId });
+          await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", item.id);
+          await refetchItems();
+        }} />
+      </label>
+    );
   }
 }
