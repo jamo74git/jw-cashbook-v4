@@ -1,6 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
 // ── Admin Supabase client (service_role, bypasses RLS) ──────────────────────
@@ -19,35 +17,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing required fields: email, password, role, hierarchy_id, scope_level" }, { status: 400 });
     }
 
-    // ── Verify caller is HO ─────────────────────────────────────────────────
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) { return cookieStore.get(name)?.value; },
-          set(name: string, value: string, options: CookieOptions) { try { cookieStore.set({ name, value, ...options }); } catch {} },
-          remove(name: string, options: CookieOptions) { try { cookieStore.set({ name, value: "", ...options }); } catch {} },
-        },
-      }
-    );
-
-    const { data: { user: callerUser } } = await supabase.auth.getUser();
-    if (!callerUser) {
-      return NextResponse.json({ error: "Unauthorized. Please log in again." }, { status: 401 });
+    // ── Verify caller is HO using Bearer token ──────────────────────────────
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return NextResponse.json({ error: "Unauthorized. No auth token provided." }, { status: 401 });
     }
 
-    // Check caller has HO role (use admin client to bypass RLS)
+    const token = authHeader.replace("Bearer ", "");
+    const { data: { user: callerUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !callerUser) {
+      return NextResponse.json({ error: "Unauthorized. Invalid or expired session. Please log in again." }, { status: 401 });
+    }
+
+    // Check caller has HO role (admin client bypasses RLS)
     const { data: callerAccess } = await supabaseAdmin
       .from("user_hierarchy_access")
       .select("role")
       .eq("user_id", callerUser.id)
       .eq("status", "active")
-      .single();
+      .limit(1)
+      .maybeSingle();
 
     if (!callerAccess || callerAccess.role !== "HO") {
-      return NextResponse.json({ error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none"}` }, { status: 403 });
+      return NextResponse.json({ error: `Forbidden. Only HO can create users. Your role: ${callerAccess?.role ?? "none (no active access record)"}` }, { status: 403 });
     }
 
     // ── Step 1: Create auth user ────────────────────────────────────────────

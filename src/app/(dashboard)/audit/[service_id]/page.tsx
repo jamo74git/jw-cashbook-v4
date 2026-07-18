@@ -69,7 +69,6 @@ export default function AuditReviewPage() {
     return off?.officer_code ?? "Officer";
   };
 
-  const hasProof = (id: string) => attachments.some(a => a.line_item_id === id);
   const getAtt = (id: string) => attachments.find(a => a.line_item_id === id);
 
   // Totals
@@ -89,8 +88,9 @@ export default function AuditReviewPage() {
       if (!window.confirm("SELF_REVIEW_EXCEPTION will be logged. Continue?")) return;
       await logSelfReviewException({ userId: access.user_id, entityType: "cashbook_period", entityId: period.id, assumedRole: "Auditor" });
     }
-    setProcessing(true);
-    await supabase.from("cashbook_period").update({ status: "AuditApproved", audit_comment: comment || "Approved" }).eq("id", period.id);
+    setProcessing(true); setError(null);
+    const { error: updateErr } = await supabase.from("cashbook_period").update({ status: "AuditApproved", audit_comment: comment || "Approved" }).eq("id", period.id);
+    if (updateErr) { setError(updateErr.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_APPROVE", entityType: "cashbook_period", entityId: period.id, comment: comment || "Approved" });
     setProcessing(false);
     router.push("/audit");
@@ -102,8 +102,9 @@ export default function AuditReviewPage() {
       if (!window.confirm("SELF_REVIEW_EXCEPTION will be logged. Continue?")) return;
       await logSelfReviewException({ userId: access.user_id, entityType: "cashbook_period", entityId: period.id, assumedRole: "Auditor" });
     }
-    setProcessing(true);
-    await supabase.from("cashbook_period").update({ status: "Rejected", audit_comment: comment }).eq("id", period.id);
+    setProcessing(true); setError(null);
+    const { error: rejectErr } = await supabase.from("cashbook_period").update({ status: "Rejected", audit_comment: comment }).eq("id", period.id);
+    if (rejectErr) { setError(rejectErr.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_REJECT", entityType: "cashbook_period", entityId: period.id, comment });
     setProcessing(false);
     router.push("/audit");

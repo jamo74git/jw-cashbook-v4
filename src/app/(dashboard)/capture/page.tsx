@@ -105,6 +105,7 @@ export default function CapturePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [success, setSuccess] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [toast, setToast] = useState<string | null>(null);

@@ -14,6 +14,7 @@ export function AppHeader() {
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [congCount, setCongCount] = useState(0);
+  const [districtName, setDistrictName] = useState("");
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -32,6 +33,22 @@ export function AppHeader() {
         setCongCount(count ?? 0);
       } else if (a.congregation_id) {
         setCongCount(1);
+      }
+
+      // For HO users, fetch district name
+      if (a.role === "HO") {
+        const { data: assignments } = await supabase
+          .from("ho_district_assignments")
+          .select("district_id")
+          .eq("user_id", user?.id ?? "");
+        if (assignments && assignments.length > 0) {
+          const { data: district } = await supabase
+            .from("hierarchy_levels")
+            .select("name")
+            .eq("id", assignments[0].district_id)
+            .single();
+          if (district) setDistrictName(district.name);
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,7 +86,11 @@ export function AppHeader() {
             <span className="text-muted-foreground">|</span>
             <span>Role: <b>{access?.role}</b></span>
             <span className="text-muted-foreground">|</span>
-            <span>Scope: <b>{congCount} Congregation{congCount !== 1 ? "s" : ""}</b></span>
+            {access?.role === "HO" && districtName ? (
+              <span>District: <b>{districtName}</b></span>
+            ) : (
+              <span>Scope: <b>{congCount} Congregation{congCount !== 1 ? "s" : ""}</b></span>
+            )}
           </div>
           {access && <Badge variant="secondary" className="text-[10px] sm:hidden">{access.role}</Badge>}
 
