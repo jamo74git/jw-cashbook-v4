@@ -426,11 +426,10 @@ export default function CapturePage() {
         ))}
       </div>
 
-      {/* Running Totals Banner (Members/Officers/Burial/Expenses — not Banking) */}
+      {/* Running Totals Banner (all tabs except Banking) */}
       {activeTab !== "Banking" && (
         <div className="grid grid-cols-3 gap-2 mb-3">
           {["EFT", "DirectDebit", "Cash"].map(t => {
-            // Always show totals across Members + Officers (income items)
             const filtered = items.filter(i => ["Members","Officers"].includes(i.section) && i.item_type === t);
             return (
               <Card key={t} className="bg-blue-50 border-blue-200">
