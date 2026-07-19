@@ -173,7 +173,14 @@ export default function OfficersPage() {
   async function handleReassign(officerId: string) {
     if (!editCongId) return;
     setSaving(true);
-    await supabase.from("officers").update({ congregation_id: editCongId }).eq("id", officerId);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      await fetch("/api/admin/update-officer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+        body: JSON.stringify({ id: officerId, congregation_id: editCongId }),
+      });
+    }
     setSaving(false);
     setEditId(null); setEditCongId("");
     setToast("Officer reassigned");
@@ -182,7 +189,14 @@ export default function OfficersPage() {
 
   async function toggleActive(officer: Officer) {
     setSaving(true);
-    await supabase.from("officers").update({ is_active: !officer.is_active }).eq("id", officer.id);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      await fetch("/api/admin/update-officer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+        body: JSON.stringify({ id: officer.id, is_active: !officer.is_active }),
+      });
+    }
     setSaving(false);
     setToast(officer.is_active ? "Officer deactivated" : "Officer activated");
     await loadData();
