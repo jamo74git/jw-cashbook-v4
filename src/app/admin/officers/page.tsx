@@ -199,7 +199,7 @@ export default function OfficersPage() {
           <p className="text-xs text-muted-foreground">Create, reassign, and manage all officers across the organisation.</p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => setShowCreate(!showCreate)}>{showCreate ? "Cancel" : "+ New Officer"}</Button>
+          {!showCreate && <Button size="sm" onClick={() => setShowCreate(true)}>+ New Officer</Button>}
           <Button variant="outline" size="sm" onClick={() => window.history.back()}>← Back</Button>
         </div>
       </div>
@@ -262,7 +262,10 @@ export default function OfficersPage() {
                 {SERVICE_STATUSES.map(s => <option key={s} value={s}>{serviceLabel(s)}</option>)}
               </select>
             </div>
-            <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Officer"}</Button>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Officer"}</Button>
+              <Button size="sm" variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
+            </div>
           </CardContent>
         </Card>
       )}
