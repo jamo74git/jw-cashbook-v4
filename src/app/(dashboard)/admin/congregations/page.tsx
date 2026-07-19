@@ -1,0 +1,271 @@
+"use client";
+
+import { useEffect, useState, useMemo } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { getUserAccess } from "@/lib/permissions";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import type { UserHierarchyAccess } from "@/lib/types";
+
+interface Congregation {
+  id: string;
+  name: string;
+  code: string;
+  eldership_id: string | null;
+  overseership_id: string | null;
+  property_status: string | null;
+  water_meter_number: string | null;
+  electricity_meter_number: string | null;
+  admin_elder_id: string | null;
+  physical_address: string | null;
+  contact_number: string | null;
+}
+
+interface HierarchyNode { id: string; name: string; level_type: string; parent_id: string | null; }
+interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; rank: string; congregation_id: string; }
+
+export default function CongregationsPage() {
+  const supabase = createClient();
+  const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
+  const [congregations, setCongregations] = useState<Congregation[]>([]);
+  const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Filters
+  const [filterOverseership, setFilterOverseership] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Edit modal
+  const [editCong, setEditCong] = useState<Congregation | null>(null);
+  const [editForm, setEditForm] = useState({
+    property_status: "unknown",
+    water_meter_number: "",
+    electricity_meter_number: "",
+    admin_elder_id: "",
+    physical_address: "",
+    contact_number: "",
+  });
+
+  useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); } }, [toast]);
+
+  useEffect(() => {
+    (async () => {
+      const ua = await getUserAccess();
+      if (!ua || ua.role !== "HO") { setLoading(false); return; }
+      setAccess(ua);
+      await loadData();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    const [{ data: congs }, { data: nodes }, { data: offs }] = await Promise.all([
+      supabase.from("congregations").select("id, name, code, eldership_id, overseership_id, property_status, water_meter_number, electricity_meter_number, admin_elder_id, physical_address, contact_number").order("name"),
+      supabase.from("hierarchy_levels").select("id, name, level_type, parent_id").order("name"),
+      supabase.from("officers").select("id, officer_code, first_name, last_name, rank, congregation_id").eq("is_active", true).order("officer_code"),
+    ]);
+    setCongregations(congs ?? []);
+    setHierarchyNodes(nodes ?? []);
+    setOfficers(offs ?? []);
+    setLoading(false);
+  }
+
+  const overseerships = useMemo(() => hierarchyNodes.filter(n => n.level_type === "Overseership"), [hierarchyNodes]);
+
+  const filteredCongs = useMemo(() => {
+    let list = congregations;
+    if (filterOverseership) list = list.filter(c => c.overseership_id === filterOverseership);
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      list = list.filter(c => c.name.toLowerCase().includes(term) || c.code.toLowerCase().includes(term));
+    }
+    return list;
+  }, [congregations, filterOverseership, searchTerm]);
+
+  function getHierarchyName(id: string | null) {
+    if (!id) return "—";
+    const n = hierarchyNodes.find(x => x.id === id);
+    return n ? n.name : "—";
+  }
+
+  function getOfficerName(id: string | null) {
+    if (!id) return "Not assigned";
+    const o = officers.find(x => x.id === id);
+    return o ? `${o.officer_code} — ${o.first_name} ${o.last_name ?? ""}`.trim() : "Unknown";
+  }
+
+  // Get eligible elders for a congregation (officers in the same overseership)
+  function getEligibleElders(cong: Congregation) {
+    if (!cong.overseership_id) return officers;
+    const congIds = congregations.filter(c => c.overseership_id === cong.overseership_id).map(c => c.id);
+    return officers.filter(o => congIds.includes(o.congregation_id));
+  }
+
+  function openEdit(cong: Congregation) {
+    setEditCong(cong);
+    setEditForm({
+      property_status: cong.property_status ?? "unknown",
+      water_meter_number: cong.water_meter_number ?? "",
+      electricity_meter_number: cong.electricity_meter_number ?? "",
+      admin_elder_id: cong.admin_elder_id ?? "",
+      physical_address: cong.physical_address ?? "",
+      contact_number: cong.contact_number ?? "",
+    });
+  }
+
+  async function handleSave() {
+    if (!editCong) return;
+    setSaving(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from("congregations").update({
+      property_status: editForm.property_status,
+      water_meter_number: editForm.water_meter_number || null,
+      electricity_meter_number: editForm.electricity_meter_number || null,
+      admin_elder_id: editForm.admin_elder_id || null,
+      physical_address: editForm.physical_address || null,
+      contact_number: editForm.contact_number || null,
+      updated_at: new Date().toISOString(),
+      updated_by: user?.id,
+    }).eq("id", editCong.id);
+    setSaving(false);
+    setToast(`${editCong.name} updated`);
+    setEditCong(null);
+    await loadData();
+  }
+
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
+  if (access?.role !== "HO") return <div className="p-6 text-sm text-destructive">Access denied. HO only.</div>;
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold">Congregation Management</h1>
+          <p className="text-xs text-muted-foreground">View and edit congregation details, property info, and admin assignments.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => window.history.back()}>← Back</Button>
+      </div>
+
+      {toast && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800">{toast}</div>}
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="py-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="space-y-0.5">
+              <Label className="text-[10px] text-muted-foreground">Overseership</Label>
+              <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterOverseership} onChange={e => setFilterOverseership(e.target.value)}>
+                <option value="">All</option>
+                {overseerships.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-0.5">
+              <Label className="text-[10px] text-muted-foreground">Search</Label>
+              <Input className="h-8 text-xs" placeholder="Name or code..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+            </div>
+            <div className="flex items-end">
+              <p className="text-xs text-muted-foreground">{filteredCongs.length} congregation{filteredCongs.length !== 1 ? "s" : ""}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Edit Panel */}
+      {editCong && (
+        <Card className="border-primary/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Edit: {editCong.code} — {editCong.name}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Property Status</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={editForm.property_status} onChange={e => setEditForm(f => ({ ...f, property_status: e.target.value }))}>
+                  <option value="unknown">Unknown</option>
+                  <option value="owned">Owned</option>
+                  <option value="leased">Leased / Rented</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Administrative Elder</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={editForm.admin_elder_id} onChange={e => setEditForm(f => ({ ...f, admin_elder_id: e.target.value }))}>
+                  <option value="">Not assigned</option>
+                  {getEligibleElders(editCong).map(o => <option key={o.id} value={o.id}>{o.officer_code} — {o.first_name} {o.last_name ?? ""}</option>)}
+                </select>
+              </div>
+              {editForm.property_status === "owned" && (
+                <>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Water Meter Number</Label>
+                    <Input className="h-8 text-xs" value={editForm.water_meter_number} onChange={e => setEditForm(f => ({ ...f, water_meter_number: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Electricity Meter Number</Label>
+                    <Input className="h-8 text-xs" value={editForm.electricity_meter_number} onChange={e => setEditForm(f => ({ ...f, electricity_meter_number: e.target.value }))} />
+                  </div>
+                </>
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Physical Address</Label>
+                <Input className="h-8 text-xs" value={editForm.physical_address} onChange={e => setEditForm(f => ({ ...f, physical_address: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Contact Number</Label>
+                <Input className="h-8 text-xs" value={editForm.contact_number} onChange={e => setEditForm(f => ({ ...f, contact_number: e.target.value }))} />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleSave} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button>
+              <Button size="sm" variant="outline" onClick={() => setEditCong(null)}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Congregations Table */}
+      <Card>
+        <CardContent className="pt-4">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="pb-2 pr-3">Code</th>
+                  <th className="pb-2 pr-3">Name</th>
+                  <th className="pb-2 pr-3">Overseership</th>
+                  <th className="pb-2 pr-3">Property</th>
+                  <th className="pb-2 pr-3">Admin Elder</th>
+                  <th className="pb-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCongs.map(c => (
+                  <tr key={c.id} className="border-b last:border-0 hover:bg-muted/30">
+                    <td className="py-2 pr-3 font-mono font-medium">{c.code}</td>
+                    <td className="py-2 pr-3">{c.name}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{getHierarchyName(c.overseership_id)}</td>
+                    <td className="py-2 pr-3">
+                      <Badge variant={c.property_status === "owned" ? "default" : c.property_status === "leased" ? "secondary" : "outline"} className="text-[9px]">
+                        {c.property_status ?? "unknown"}
+                      </Badge>
+                    </td>
+                    <td className="py-2 pr-3 text-muted-foreground">{getOfficerName(c.admin_elder_id)}</td>
+                    <td className="py-2">
+                      <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => openEdit(c)}>Edit</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

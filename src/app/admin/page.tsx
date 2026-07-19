@@ -100,14 +100,18 @@ export default function AdminDashboard() {
               <CardContent><p className="text-sm text-muted-foreground">Assign users to congregations. Manage multi-congregation access for Elders.</p></CardContent>
             </Card>
           </a>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Bulk Import</CardTitle></CardHeader>
-            <CardContent><p className="text-sm text-muted-foreground">CSV import for congregations, officers, users.</p></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Audit Logs</CardTitle></CardHeader>
-            <CardContent><p className="text-sm text-muted-foreground">View all system actions and override exceptions.</p></CardContent>
-          </Card>
+          <a href="/admin/officers" className="block">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Officer Management</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Create and manage Priests and Underdeacons. Reassign to congregations.</p></CardContent>
+            </Card>
+          </a>
+          <a href="/admin/congregations" className="block">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Congregations</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Manage congregation details, property info, and administrative assignments.</p></CardContent>
+            </Card>
+          </a>
         </div>
 
         <p className="text-xs text-muted-foreground text-center">Coming Soon — Full admin functionality</p>
