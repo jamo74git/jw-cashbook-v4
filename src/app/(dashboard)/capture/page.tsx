@@ -607,15 +607,15 @@ export default function CapturePage() {
                 </CardContent>
               </Card>
 
-              {/* Cash Pending — split into Cash Income and Cash Burial */}
+              {/* Cash Pending — show Cash Income and Cash Burial as summary lines */}
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-xs">Cash Pending</CardTitle></CardHeader>
                 <CardContent>
                   {(() => {
-                    // Cash Income = Members + Officers cash (item_type Cash/CashPending, section Members or Officers)
+                    // Cash Income = Members + Officers cash (item_type Cash/CashPending)
                     const cashIncomeItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type) && ["Members","Officers"].includes(i.section));
-                    // Cash Burial = Burial items paid in cash (item_type Burial, payment_type Burial — cash payments)
-                    const cashBurialItems = items.filter(i => i.item_type === "Burial" && i.payment_type === "Burial");
+                    // Cash Burial = Burial items (all burial is cash by nature)
+                    const cashBurialItems = items.filter(i => i.item_type === "Burial");
                     const cashIncomeTotal = cashIncomeItems.reduce((s, i) => s + Number(i.amount), 0);
                     const cashBurialTotal = cashBurialItems.reduce((s, i) => s + Number(i.amount), 0);
                     const allCashItems = [...cashIncomeItems, ...cashBurialItems];
@@ -626,37 +626,34 @@ export default function CapturePage() {
                     const allBanked = allCashItems.every(i => hasProof(i.id));
                     return (
                       <div className="space-y-3">
-                        {/* Breakdown table */}
+                        {/* Summary breakdown */}
                         <table className="w-full text-xs">
-                          <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Receipt</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1">Proof</th></tr></thead>
+                          <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Entries</th><th className="pb-1 text-right">Amount</th></tr></thead>
                           <tbody>
-                            {cashIncomeItems.length > 0 && (<>
-                              {cashIncomeItems.map(item => { const off = officers.find(o => o.id === item.officer_id); return (
-                                <tr key={item.id} className="border-b last:border-0">
-                                  <td className="py-1.5 pr-2">Income ({off?.officer_code ?? "—"})</td>
-                                  <td className="py-1.5 pr-2">—</td>
-                                  <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                                  <td className="py-1.5"><ProofBtn item={item} /></td>
-                                </tr>); })}
-                              <tr className="bg-muted/50 font-bold border-t"><td className="py-1.5 pl-2 text-[11px]">Subtotal Cash Income</td><td></td><td className="py-1.5 text-right text-[11px]">R{cashIncomeTotal.toFixed(2)}</td><td></td></tr>
-                            </>)}
-                            {cashBurialItems.length > 0 && (<>
-                              {cashBurialItems.map(item => (
-                                <tr key={item.id} className="border-b last:border-0">
-                                  <td className="py-1.5 pr-2">Burial</td>
-                                  <td className="py-1.5 pr-2">{item.receipt_number || "—"}</td>
-                                  <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                                  <td className="py-1.5"><ProofBtn item={item} /></td>
-                                </tr>))}
-                              <tr className="bg-muted/50 font-bold border-t"><td className="py-1.5 pl-2 text-[11px]">Subtotal Cash Burial</td><td></td><td className="py-1.5 text-right text-[11px]">R{cashBurialTotal.toFixed(2)}</td><td></td></tr>
-                            </>)}
-                            <tr className="font-bold border-t"><td className="py-2">TOTAL CASH</td><td></td><td className="py-2 text-right">R{cashTotal.toFixed(2)}</td><td></td></tr>
+                            {cashIncomeItems.length > 0 && (
+                              <tr className="border-b">
+                                <td className="py-2 pr-2 font-medium">Cash Income</td>
+                                <td className="py-2 pr-2 text-muted-foreground">{cashIncomeItems.length} {cashIncomeItems.length === 1 ? "entry" : "entries"}</td>
+                                <td className="py-2 text-right font-medium">R{cashIncomeTotal.toFixed(2)}</td>
+                              </tr>
+                            )}
+                            {cashBurialItems.length > 0 && (
+                              <tr className="border-b">
+                                <td className="py-2 pr-2 font-medium">Cash Burial</td>
+                                <td className="py-2 pr-2 text-muted-foreground">{cashBurialItems.length} {cashBurialItems.length === 1 ? "receipt" : "receipts"} ({cashBurialItems.map(i => i.receipt_number || "—").join(", ")})</td>
+                                <td className="py-2 text-right font-medium">R{cashBurialTotal.toFixed(2)}</td>
+                              </tr>
+                            )}
+                            <tr className="font-bold border-t bg-muted/30">
+                              <td className="py-2 pl-1">TOTAL CASH PENDING</td>
+                              <td className="py-2 text-muted-foreground">{allCashItems.length} entries</td>
+                              <td className="py-2 text-right">R{cashTotal.toFixed(2)}</td>
+                            </tr>
                           </tbody>
                         </table>
 
                         {/* Single Mark Banked button for all cash */}
-                        <div className="flex items-center justify-between pt-1">
-                          <p className="text-[10px] text-muted-foreground">{allCashItems.length} cash {allCashItems.length === 1 ? "entry" : "entries"} to bank</p>
+                        <div className="flex items-center justify-end">
                           {allBanked ? (
                             <span className="inline-flex items-center gap-1 text-green-600 text-xs font-medium">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
