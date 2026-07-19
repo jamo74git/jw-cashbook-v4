@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
-import { AppHeader } from "@/components/AppHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,15 +121,14 @@ export default function CreateUserPage() {
     setCongregationId("");
   }
 
-  if (loading) return <><AppHeader /><div className="p-6 text-sm text-muted-foreground">Loading...</div></>;
-  if (access?.role !== "HO") return <><AppHeader /><div className="p-6 text-sm text-destructive">Access denied. HO only.</div></>;
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
+  if (access?.role !== "HO") return <div className="p-6 text-sm text-destructive">Access denied. HO only.</div>;
 
   // Filter hierarchy nodes by the selected scope level
   const filteredNodes = hierarchyNodes.filter(n => n.level_type === scopeLevel);
 
   return (
     <>
-      <AppHeader />
       <div className="max-w-lg mx-auto px-4 py-6 space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-bold">Create User</h1>

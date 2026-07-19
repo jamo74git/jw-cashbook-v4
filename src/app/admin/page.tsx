@@ -47,15 +47,15 @@ export default function AdminDashboard() {
   }, []);
 
   if (loading) {
-    return <main className="min-h-screen bg-muted/40 px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-muted-foreground">Loading...</p></div></main>;
+    return <div className="px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-muted-foreground">Loading...</p></div></div>;
   }
 
   if (!role || !hasPermission(role, "admin.manage_users")) {
-    return <main className="min-h-screen bg-muted/40 px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-destructive">Access denied. HO Admin only.</p></div></main>;
+    return <div className="px-4 py-12"><div className="mx-auto max-w-4xl"><p className="text-destructive">Access denied. HO Admin only.</p></div></div>;
   }
 
   return (
-    <main className="min-h-screen bg-muted/40 px-4 py-6">
+    <div className="px-4 py-6">
       <div className="mx-auto max-w-4xl space-y-6">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Head Office Administration</h1>
@@ -112,6 +112,6 @@ export default function AdminDashboard() {
 
         <p className="text-xs text-muted-foreground text-center">Coming Soon — Full admin functionality</p>
       </div>
-    </main>
+    </div>
   );
 }

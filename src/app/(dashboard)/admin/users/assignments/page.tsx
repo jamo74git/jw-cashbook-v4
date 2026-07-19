@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
-import { AppHeader } from "@/components/AppHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -122,8 +121,8 @@ export default function AssignmentsPage() {
     return assignments.some(a => a.user_id === userId && a.congregation_id === congregationId);
   }
 
-  if (loading) return <><AppHeader /><div className="p-6 text-sm text-muted-foreground">Loading...</div></>;
-  if (access?.role !== "HO") return <><AppHeader /><div className="p-6 text-sm text-destructive">Access denied. HO only.</div></>;
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
+  if (access?.role !== "HO") return <div className="p-6 text-sm text-destructive">Access denied. HO only.</div>;
 
   const roles = ["All", ...new Set(users.map(u => u.role))];
   const filteredUsers = filterRole === "All" ? users : users.filter(u => u.role === filterRole);
@@ -132,7 +131,6 @@ export default function AssignmentsPage() {
 
   return (
     <>
-      <AppHeader />
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
         <div className="flex items-center justify-between">
           <div>
