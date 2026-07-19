@@ -607,23 +607,56 @@ export default function CapturePage() {
                 </CardContent>
               </Card>
 
-              {/* Cash Pending — single total with one Mark Banked button */}
+              {/* Cash Pending — split into Cash Income and Cash Burial */}
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-xs">Cash Pending</CardTitle></CardHeader>
                 <CardContent>
                   {(() => {
-                    const cashItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type));
-                    const cashTotal = cashItems.reduce((s, i) => s + Number(i.amount), 0);
-                    if (cashItems.length === 0) return <p className="text-xs text-green-600 font-medium">All cash banked ✓</p>;
+                    // Cash Income = Members + Officers cash (item_type Cash/CashPending, section Members or Officers)
+                    const cashIncomeItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type) && ["Members","Officers"].includes(i.section));
+                    // Cash Burial = Burial items paid in cash (item_type Burial, payment_type Burial — cash payments)
+                    const cashBurialItems = items.filter(i => i.item_type === "Burial" && i.payment_type === "Burial");
+                    const cashIncomeTotal = cashIncomeItems.reduce((s, i) => s + Number(i.amount), 0);
+                    const cashBurialTotal = cashBurialItems.reduce((s, i) => s + Number(i.amount), 0);
+                    const allCashItems = [...cashIncomeItems, ...cashBurialItems];
+                    const cashTotal = cashIncomeTotal + cashBurialTotal;
+
+                    if (allCashItems.length === 0) return <p className="text-xs text-green-600 font-medium">All cash banked ✓</p>;
                     // Check if already marked as banked (all have proof)
-                    const allBanked = cashItems.every(i => hasProof(i.id));
+                    const allBanked = allCashItems.every(i => hasProof(i.id));
                     return (
                       <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-bold">Amount to be Banked: R{cashTotal.toFixed(2)}</p>
-                            <p className="text-[10px] text-muted-foreground">{cashItems.length} cash {cashItems.length === 1 ? "entry" : "entries"}</p>
-                          </div>
+                        {/* Breakdown table */}
+                        <table className="w-full text-xs">
+                          <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Receipt</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1">Proof</th></tr></thead>
+                          <tbody>
+                            {cashIncomeItems.length > 0 && (<>
+                              {cashIncomeItems.map(item => { const off = officers.find(o => o.id === item.officer_id); return (
+                                <tr key={item.id} className="border-b last:border-0">
+                                  <td className="py-1.5 pr-2">Income ({off?.officer_code ?? "—"})</td>
+                                  <td className="py-1.5 pr-2">—</td>
+                                  <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                                  <td className="py-1.5"><ProofBtn item={item} /></td>
+                                </tr>); })}
+                              <tr className="bg-muted/50 font-bold border-t"><td className="py-1.5 pl-2 text-[11px]">Subtotal Cash Income</td><td></td><td className="py-1.5 text-right text-[11px]">R{cashIncomeTotal.toFixed(2)}</td><td></td></tr>
+                            </>)}
+                            {cashBurialItems.length > 0 && (<>
+                              {cashBurialItems.map(item => (
+                                <tr key={item.id} className="border-b last:border-0">
+                                  <td className="py-1.5 pr-2">Burial</td>
+                                  <td className="py-1.5 pr-2">{item.receipt_number || "—"}</td>
+                                  <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                                  <td className="py-1.5"><ProofBtn item={item} /></td>
+                                </tr>))}
+                              <tr className="bg-muted/50 font-bold border-t"><td className="py-1.5 pl-2 text-[11px]">Subtotal Cash Burial</td><td></td><td className="py-1.5 text-right text-[11px]">R{cashBurialTotal.toFixed(2)}</td><td></td></tr>
+                            </>)}
+                            <tr className="font-bold border-t"><td className="py-2">TOTAL CASH</td><td></td><td className="py-2 text-right">R{cashTotal.toFixed(2)}</td><td></td></tr>
+                          </tbody>
+                        </table>
+
+                        {/* Single Mark Banked button for all cash */}
+                        <div className="flex items-center justify-between pt-1">
+                          <p className="text-[10px] text-muted-foreground">{allCashItems.length} cash {allCashItems.length === 1 ? "entry" : "entries"} to bank</p>
                           {allBanked ? (
                             <span className="inline-flex items-center gap-1 text-green-600 text-xs font-medium">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -646,7 +679,7 @@ export default function CapturePage() {
                                 await supabase.storage.from("cashbook-proofs").upload(storagePath, compressed);
                                 const { data: u } = supabase.storage.from("cashbook-proofs").getPublicUrl(storagePath);
                                 // Attach proof to ALL cash items and mark them as CashBanked
-                                for (const ci of cashItems) {
+                                for (const ci of allCashItems) {
                                   await supabase.from("cashbook_attachment").insert({ line_item_id: ci.id, file_url: u.publicUrl, uploaded_by: user?.id, congregation_id: congId, transaction_date: new Date().toISOString().split("T")[0] });
                                   await supabase.from("cashbook_line_item").update({ item_type: "CashBanked", payment_type: "CashBanked", proof_status: "uploaded" }).eq("id", ci.id);
                                 }
