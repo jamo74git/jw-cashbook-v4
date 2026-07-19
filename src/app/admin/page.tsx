@@ -88,10 +88,18 @@ export default function AdminDashboard() {
 
         {/* Admin Modules */}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">User Management</CardTitle></CardHeader>
-            <CardContent><p className="text-sm text-muted-foreground">Manage user access, roles, and hierarchy assignments.</p></CardContent>
-          </Card>
+          <a href="/admin/users/create" className="block">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Create User</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Create new users with role and hierarchy access.</p></CardContent>
+            </Card>
+          </a>
+          <a href="/admin/users/assignments" className="block">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Congregation Assignments</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Assign users to congregations. Manage multi-congregation access for Elders.</p></CardContent>
+            </Card>
+          </a>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Bulk Import</CardTitle></CardHeader>
             <CardContent><p className="text-sm text-muted-foreground">CSV import for congregations, officers, users.</p></CardContent>
@@ -99,10 +107,6 @@ export default function AdminDashboard() {
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-base">Audit Logs</CardTitle></CardHeader>
             <CardContent><p className="text-sm text-muted-foreground">View all system actions and override exceptions.</p></CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Corrections</CardTitle></CardHeader>
-            <CardContent><p className="text-sm text-muted-foreground">Unlock months and raise correction requests.</p></CardContent>
           </Card>
         </div>
 

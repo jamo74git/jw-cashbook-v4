@@ -98,8 +98,27 @@ export default function ElderDashboard() {
     if (!ua) { setLoading(false); return; }
     setAccess(ua);
 
-    const { data: congs } = await supabase.from("congregations").select("id, name, code").eq("eldership_id", ua.hierarchy_id);
-    const congList = congs ?? [];
+    // Get congregations from user_congregation_assignments (multi-congregation support)
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setLoading(false); return; }
+
+    const { data: assignments } = await supabase
+      .from("user_congregation_assignments")
+      .select("congregation_id")
+      .eq("user_id", user.id)
+      .eq("status", "active");
+
+    let congList: Congregation[] = [];
+    if (assignments && assignments.length > 0) {
+      const congIds = assignments.map(a => a.congregation_id);
+      const { data: congs } = await supabase.from("congregations").select("id, name, code").in("id", congIds).order("name");
+      congList = congs ?? [];
+    } else {
+      // Fallback: legacy eldership-based lookup
+      const { data: congs } = await supabase.from("congregations").select("id, name, code").eq("eldership_id", ua.hierarchy_id);
+      congList = congs ?? [];
+    }
+
     setCongregations(congList);
     const congIds = congList.map(c => c.id);
     if (congIds.length === 0) { setLoading(false); return; }

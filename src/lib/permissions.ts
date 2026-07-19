@@ -241,6 +241,25 @@ export async function getHODistrictIds(userId: string): Promise<string[]> {
   return (data ?? []).map((d) => d.district_id);
 }
 
+// ─── Multi-Congregation Assignments ─────────────────────────────────────────
+
+/**
+ * Get the congregation IDs assigned to a user via user_congregation_assignments.
+ * Used by Elder, Chairperson, and any role that can span multiple congregations.
+ * Falls back to user_hierarchy_access.congregation_id if no assignments exist.
+ */
+export async function getUserCongregationIds(userId: string): Promise<string[]> {
+  const supabase = createClient();
+
+  const { data } = await supabase
+    .from("user_congregation_assignments")
+    .select("congregation_id")
+    .eq("user_id", userId)
+    .eq("status", "active");
+
+  return (data ?? []).map((d) => d.congregation_id);
+}
+
 // ─── Secretary Guard ────────────────────────────────────────────────────────
 
 /**
@@ -255,25 +274,31 @@ export function isSecretaryRestricted(role: Role, moduleFunction: string): boole
 
 /**
  * Check if a user has access to a specific congregation based on their scope.
- * For HO users, also checks ho_district_assignments.
+ * Uses user_congregation_assignments as primary source.
+ * Falls back to hierarchy-based checks for backward compatibility.
  */
 export async function canAccessCongregation(
   access: UserHierarchyAccess,
   congregationId: string
 ): Promise<boolean> {
-  // Direct congregation assignment
+  // Direct congregation assignment in hierarchy access
   if (access.congregation_id === congregationId) return true;
 
-  // Higher-scope roles can see all below them (validated by RLS)
-  if (access.scope_level !== "Congregation") return true;
-
-  // HO must have district assignment (checked via RLS, but also here for UI gating)
+  // HO users — check district assignments (all congregations in their districts)
   if (access.role === "HO") {
     const districts = await getHODistrictIds(access.user_id);
     if (districts.length === 0) return false;
-    // RLS handles the actual filtering, this is for UI gating
-    return true;
+    return true; // RLS handles actual filtering
   }
+
+  // For Elder and other multi-congregation roles, check user_congregation_assignments
+  const assignedCongs = await getUserCongregationIds(access.user_id);
+  if (assignedCongs.length > 0) {
+    return assignedCongs.includes(congregationId);
+  }
+
+  // Fallback: higher-scope roles (Overseer, Apostle) can see all below them
+  if (["Overseer", "Apostle"].includes(access.role)) return true;
 
   return false;
 }
