@@ -16,6 +16,14 @@ interface LineItem { id: string; period_id: string; section: string; officer_id:
 interface Attachment { id: string; line_item_id: string; file_url: string; transaction_date: string | null; bank_reference: string | null; }
 interface Officer { id: string; officer_code: string; }
 
+const Clip = ({ has, url }: { has: boolean; url?: string }) => has ? (
+  <a href={url} target="_blank" rel="noopener noreferrer" className="text-green-600 hover:text-green-700">
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+  </a>
+) : (
+  <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+);
+
 export default function AuditReviewPage() {
   const params = useParams();
   const router = useRouter();
@@ -32,20 +40,25 @@ export default function AuditReviewPage() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Audit checkboxes
+  const [checkedBanking, setCheckedBanking] = useState(false);
+  const [checkedCash, setCheckedCash] = useState(false);
+  const [checkedBurial, setCheckedBurial] = useState(false);
+  const [checkedExpenses, setCheckedExpenses] = useState(false);
+
   const role = access?.role as Role | undefined;
   const canApprove = role ? hasPermission(role, "audit.approve") : false;
   const canReject = role ? hasPermission(role, "audit.reject") : false;
+  const allChecked = checkedBanking && checkedCash && checkedBurial && checkedExpenses;
 
   const load = useCallback(async () => {
     setLoading(true);
     const ua = await getUserAccess();
     if (!ua) { setLoading(false); return; }
     setAccess(ua);
-
     const { data: p } = await supabase.from("cashbook_period").select("*").eq("id", serviceId).single();
     if (!p) { setLoading(false); return; }
     setPeriod(p);
-
     const [li, att, off] = await Promise.all([
       supabase.from("cashbook_line_item").select("id, period_id, section, officer_id, item_type, amount, is_officer, receipt_number, manual_reference, transaction_date").eq("period_id", serviceId),
       supabase.from("cashbook_attachment").select("id, line_item_id, file_url, transaction_date, bank_reference"),
@@ -61,25 +74,24 @@ export default function AuditReviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Masked officer display (code only, no name)
-  const maskedOfficer = (officerId: string | null) => {
-    if (!officerId) return "—";
-    const off = officers.find(o => o.id === officerId);
-    return off?.officer_code ?? "Officer";
-  };
-
+  const maskedOfficer = (id: string | null) => { if (!id) return "—"; const o = officers.find(x => x.id === id); return o?.officer_code ?? "Officer"; };
   const getAtt = (id: string) => attachments.find(a => a.line_item_id === id);
 
   // Totals
-  const membersT = items.filter(i => !i.is_officer && ["EFT","Cash","DirectDebit","CashBanked"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
-  const officersT = items.filter(i => i.is_officer && ["EFT","Cash","DirectDebit","CashBanked"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
-  const burialT = items.filter(i => i.item_type === "Burial").reduce((s,i)=>s+Number(i.amount),0);
-  const expensesT = items.filter(i => i.item_type === "Expense").reduce((s,i)=>s+Number(i.amount),0);
-  const grandIncome = membersT + officersT + burialT;
+  const ddItems = items.filter(i => i.item_type === "DirectDebit" && ["Members","Officers"].includes(i.section));
+  const eftItems = items.filter(i => i.item_type === "EFT" && ["Members","Officers"].includes(i.section));
+  const cashBankedItems = items.filter(i => i.item_type === "CashBanked");
+  const cashPendingItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type));
+  const burialItems = items.filter(i => i.item_type === "Burial");
+  const expenseItems = items.filter(i => i.item_type === "Expense");
 
-  // Banking items sorted
-  const bankingItems = items.filter(i => ["EFT","DirectDebit","CashBanked"].includes(i.item_type))
-    .sort((a, b) => { const o = (t: string) => t === "DirectDebit" ? 0 : t === "EFT" ? 1 : 2; return o(a.item_type) - o(b.item_type); });
+  const bankingTotal = [...ddItems, ...eftItems, ...cashBankedItems].reduce((s, i) => s + Number(i.amount), 0);
+  const cashTotal = cashPendingItems.reduce((s, i) => s + Number(i.amount), 0) + burialItems.reduce((s, i) => s + Number(i.amount), 0);
+  const burialTotal = burialItems.reduce((s, i) => s + Number(i.amount), 0);
+  const expensesTotal = expenseItems.reduce((s, i) => s + Number(i.amount), 0);
+  const membersT = items.filter(i => !i.is_officer && ["EFT","Cash","DirectDebit","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+  const officersT = items.filter(i => i.is_officer && ["EFT","Cash","DirectDebit","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+  const grandIncome = membersT + officersT + burialTotal;
 
   async function handleApprove() {
     if (!period || !access || !canApprove) return;
@@ -88,11 +100,10 @@ export default function AuditReviewPage() {
       await logSelfReviewException({ userId: access.user_id, entityType: "cashbook_period", entityId: period.id, assumedRole: "Auditor" });
     }
     setProcessing(true); setError(null);
-    const { error: updateErr } = await supabase.from("cashbook_period").update({ status: "AuditApproved", audit_comment: comment || "Approved" }).eq("id", period.id);
-    if (updateErr) { setError(updateErr.message); setProcessing(false); return; }
+    const { error: e } = await supabase.from("cashbook_period").update({ status: "AuditApproved", audit_comment: comment || "Approved" }).eq("id", period.id);
+    if (e) { setError(e.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_APPROVE", entityType: "cashbook_period", entityId: period.id, comment: comment || "Approved" });
-    setProcessing(false);
-    router.push("/audit");
+    setProcessing(false); router.push("/audit");
   }
 
   async function handleReject() {
@@ -102,145 +113,207 @@ export default function AuditReviewPage() {
       await logSelfReviewException({ userId: access.user_id, entityType: "cashbook_period", entityId: period.id, assumedRole: "Auditor" });
     }
     setProcessing(true); setError(null);
-    const { error: rejectErr } = await supabase.from("cashbook_period").update({ status: "Rejected", audit_comment: comment }).eq("id", period.id);
-    if (rejectErr) { setError(rejectErr.message); setProcessing(false); return; }
+    const { error: e } = await supabase.from("cashbook_period").update({ status: "Rejected", audit_comment: comment }).eq("id", period.id);
+    if (e) { setError(e.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_REJECT", entityType: "cashbook_period", entityId: period.id, comment });
-    setProcessing(false);
-    router.push("/audit");
+    setProcessing(false); router.push("/audit");
   }
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading audit...</div>;
   if (!period) return <div className="p-6 text-sm text-destructive">Period not found.</div>;
 
+  const renderGroup = (groupItems: LineItem[], label: string) => groupItems.length === 0 ? null : (<>
+    {groupItems.map(item => { const att = getAtt(item.id); return (
+      <tr key={item.id} className="border-b last:border-0">
+        <td className="py-1.5 pr-2">{att?.transaction_date ?? item.transaction_date ?? "—"}</td>
+        <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
+        <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+        <td className="py-1.5 pr-2">{maskedOfficer(item.officer_id)}</td>
+        <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
+      </tr>); })}
+    <tr className="bg-muted/50 font-bold border-t"><td colSpan={2} className="py-1.5 pl-2 text-[11px]">Subtotal {label}</td><td className="py-1.5 text-right text-[11px]">R{groupItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
+  </>);
+
   return (
-    <>
-      <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
-        {/* Back button */}
-        <Button variant="outline" size="sm" onClick={() => router.push("/audit")}>← Back to Audit Queue</Button>
+    <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
+      <Button variant="outline" size="sm" onClick={() => router.push("/audit")}>← Back to Audit Queue</Button>
 
-        {/* Audit Banner */}
-        <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-bold text-orange-800">Audit in Progress</p>
-            <p className="text-[10px] text-orange-600">Week {period.week} · {period.service} · {period.year}/{String(period.month).padStart(2,"0")}</p>
-          </div>
-          <Badge variant="secondary" className="text-[10px]">{period.status}</Badge>
+      {/* Audit Banner */}
+      <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-bold text-orange-800">Audit Review</p>
+          <p className="text-[10px] text-orange-600">Week {period.week} · {period.service} · {period.year}/{String(period.month).padStart(2,"0")}</p>
         </div>
-
-        {/* Summary Cards */}
-        <div className="grid grid-cols-3 gap-2">
-          {["EFT", "DirectDebit", "Cash"].map(t => {
-            const filtered = items.filter(i => ["Members","Officers"].includes(i.section) && i.item_type === t);
-            return (
-              <Card key={t} className="bg-blue-50 border-blue-200">
-                <CardContent className="py-2 px-3 text-center">
-                  <p className="text-[10px] uppercase text-blue-600 font-medium">{t === "DirectDebit" ? "Direct Deposit" : t}</p>
-                  <p className="text-sm font-bold text-blue-900">R{filtered.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</p>
-                  <p className="text-[10px] text-blue-500">{filtered.length} entries</p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-[1fr_260px]">
-          {/* Left: Banking Detail (read-only, masked officers) */}
-          <div className="space-y-4">
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-xs">Banking Detail</CardTitle></CardHeader>
-              <CardContent>
-                {bankingItems.length === 0 ? <p className="text-xs text-muted-foreground">No electronic items.</p> : (
-                  <table className="w-full text-xs">
-                    <thead><tr className="border-b text-muted-foreground text-left">
-                      <th className="pb-1 pr-2">Date on Proof</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Officer</th><th className="pb-1">Proof</th>
-                    </tr></thead>
-                    <tbody>
-                      {bankingItems.map(item => { const att = getAtt(item.id); return (
-                        <tr key={item.id} className="border-b last:border-0">
-                          <td className="py-1.5 pr-2">{att?.transaction_date ?? item.transaction_date ?? "—"}</td>
-                          <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
-                          <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                          <td className="py-1.5 pr-2">{maskedOfficer(item.officer_id)}</td>
-                          <td className="py-1.5">
-                            {att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-green-600"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></a> : <span className="text-destructive text-[10px]">Missing</span>}
-                          </td>
-                        </tr>); })}
-                      <tr className="font-bold border-t"><td colSpan={2} className="py-2">TOTAL</td><td className="py-2 text-right">R{bankingItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
-                    </tbody>
-                  </table>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Burial */}
-            {items.filter(i => i.item_type === "Burial").length > 0 && (
-              <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs">Burial</CardTitle></CardHeader>
-                <CardContent>
-                  {items.filter(i => i.item_type === "Burial").map(item => { const att = getAtt(item.id); return (
-                    <div key={item.id} className="flex items-center gap-3 py-1.5 border-b last:border-0 text-xs">
-                      <span className="w-20 font-medium">{item.receipt_number ?? "—"}</span>
-                      <span className="flex-1 text-right font-medium">R{Number(item.amount).toFixed(2)}</span>
-                      {att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></a> : <span className="text-destructive text-[10px]">—</span>}
-                    </div>); })}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Expenses */}
-            {items.filter(i => i.item_type === "Expense").length > 0 && (
-              <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs">Expenses</CardTitle></CardHeader>
-                <CardContent>
-                  {items.filter(i => i.item_type === "Expense").map(item => { const att = getAtt(item.id); return (
-                    <div key={item.id} className="flex items-center gap-3 py-1.5 border-b last:border-0 text-xs">
-                      <span className="flex-1 truncate">{item.manual_reference ?? "—"}</span>
-                      <span className="w-24 text-right font-medium">R{Number(item.amount).toFixed(2)}</span>
-                      {att ? <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="text-green-600"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg></a> : <span className="text-destructive text-[10px]">—</span>}
-                    </div>); })}
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Approve / Reject */}
-            {period.status === "Submitted" && (canApprove || canReject) && (
-              <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs">Audit Decision</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Comment {canReject ? "(mandatory for rejection)" : "(optional)"}</Label>
-                    <Input className="h-9 text-xs" value={comment} onChange={e => setComment(e.target.value)} placeholder="Audit comment..." />
-                  </div>
-                  {error && <p className="text-xs text-destructive">{error}</p>}
-                  <div className="flex gap-3">
-                    {canApprove && <Button size="sm" className="bg-green-700 hover:bg-green-800" onClick={handleApprove} disabled={processing}>{processing ? "..." : "Approve"}</Button>}
-                    {canReject && <Button size="sm" variant="destructive" onClick={handleReject} disabled={processing || !comment.trim()}>{processing ? "..." : "Reject"}</Button>}
-                  </div>
-                  {canReject && !comment.trim() && <p className="text-[10px] text-muted-foreground">Comment required to reject.</p>}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          {/* Right: Totals */}
-          <div className="hidden md:block space-y-3">
-            <Card className="sticky top-14">
-              <CardHeader className="pb-1 px-3"><CardTitle className="text-[10px] uppercase tracking-wider text-muted-foreground">Totals</CardTitle></CardHeader>
-              <CardContent className="px-3 space-y-1 text-xs">
-                <div className="flex justify-between"><span>Members</span><b>R{membersT.toFixed(2)}</b></div>
-                <div className="flex justify-between"><span>Officers</span><b>R{officersT.toFixed(2)}</b></div>
-                <div className="flex justify-between"><span>Burial</span><b>R{burialT.toFixed(2)}</b></div>
-                <div className="flex justify-between border-t pt-1 font-bold"><span>Income</span><span>R{grandIncome.toFixed(2)}</span></div>
-                <div className="flex justify-between text-muted-foreground"><span>Expenses</span><span>R{expensesT.toFixed(2)}</span></div>
-                <div className="flex justify-between border-t pt-1 font-bold text-primary"><span>Grand Total</span><span>R{(grandIncome - expensesT).toFixed(2)}</span></div>
-              </CardContent>
-            </Card>
-            <div className="w-full rounded-md bg-orange-50 border border-orange-200 py-2 text-center">
-              <span className="text-xs font-bold text-orange-700">Audit in Progress</span>
-            </div>
-          </div>
-        </div>
+        <Badge variant="secondary" className="text-[10px]">{period.status}</Badge>
       </div>
-    </>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-3 gap-2">
+        {[{ label: "EFT", items: eftItems }, { label: "Direct Debit", items: ddItems }, { label: "Cash", items: [...cashBankedItems, ...cashPendingItems] }].map(({ label, items: gi }) => (
+          <Card key={label} className="bg-blue-50 border-blue-200">
+            <CardContent className="py-2 px-3 text-center">
+              <p className="text-[10px] uppercase text-blue-600 font-medium">{label}</p>
+              <p className="text-sm font-bold text-blue-900">R{gi.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</p>
+              <p className="text-[10px] text-blue-500">{gi.length} entries</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Banking Section */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs">Banking Detail</CardTitle>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" checked={checkedBanking} onChange={e => setCheckedBanking(e.target.checked)} className="rounded accent-green-600" />
+              <span className={checkedBanking ? "text-green-700 font-medium" : "text-muted-foreground"}>Verified</span>
+            </label>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {[...ddItems, ...eftItems, ...cashBankedItems].length === 0 ? <p className="text-xs text-muted-foreground">No electronic banking items.</p> : (
+            <table className="w-full text-xs">
+              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Date</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Officer</th><th className="pb-1">Proof</th></tr></thead>
+              <tbody>
+                {renderGroup(ddItems, "Direct Debit")}
+                {renderGroup(eftItems, "EFT")}
+                {renderGroup(cashBankedItems, "Cash Banked")}
+                <tr className="font-bold border-t"><td colSpan={2} className="py-2">BANKING TOTAL</td><td className="py-2 text-right">R{bankingTotal.toFixed(2)}</td><td colSpan={2}></td></tr>
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Cash Pending Section */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs">Cash Pending</CardTitle>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" checked={checkedCash} onChange={e => setCheckedCash(e.target.checked)} className="rounded accent-green-600" />
+              <span className={checkedCash ? "text-green-700 font-medium" : "text-muted-foreground"}>Verified</span>
+            </label>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {cashPendingItems.length === 0 && burialItems.length === 0 ? <p className="text-xs text-muted-foreground">No pending cash.</p> : (
+            <table className="w-full text-xs">
+              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Entries</th><th className="pb-1 text-right">Amount</th></tr></thead>
+              <tbody>
+                {cashPendingItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Income</td><td className="py-2 text-muted-foreground">{cashPendingItems.length}</td><td className="py-2 text-right font-medium">R{cashPendingItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td></tr>}
+                {burialItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Burial</td><td className="py-2 text-muted-foreground">{burialItems.length} ({burialItems.map(i=>i.receipt_number||"—").join(", ")})</td><td className="py-2 text-right font-medium">R{burialTotal.toFixed(2)}</td></tr>}
+                <tr className="font-bold border-t bg-muted/30"><td className="py-2">TOTAL CASH</td><td></td><td className="py-2 text-right">R{cashTotal.toFixed(2)}</td></tr>
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Burial Section - always show */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs">Burial</CardTitle>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" checked={checkedBurial} onChange={e => setCheckedBurial(e.target.checked)} className="rounded accent-green-600" />
+              <span className={checkedBurial ? "text-green-700 font-medium" : "text-muted-foreground"}>Verified</span>
+            </label>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {burialItems.length === 0 ? <p className="text-xs text-muted-foreground">No burial entries this period.</p> : (
+            <table className="w-full text-xs">
+              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Receipt</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1">Proof</th></tr></thead>
+              <tbody>
+                {burialItems.map(item => { const att = getAtt(item.id); return (
+                  <tr key={item.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2 font-medium">{item.receipt_number || "—"}</td>
+                    <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                    <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
+                  </tr>); })}
+                <tr className="font-bold border-t"><td className="py-2">TOTAL BURIAL</td><td className="py-2 text-right">R{burialTotal.toFixed(2)}</td><td></td></tr>
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Expenses Section - always show */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xs">Expenses</CardTitle>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" checked={checkedExpenses} onChange={e => setCheckedExpenses(e.target.checked)} className="rounded accent-green-600" />
+              <span className={checkedExpenses ? "text-green-700 font-medium" : "text-muted-foreground"}>Verified</span>
+            </label>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {expenseItems.length === 0 ? <p className="text-xs text-muted-foreground">No expenses this period.</p> : (
+            <table className="w-full text-xs">
+              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1">Description</th><th className="pb-1 text-right pr-2">Amount</th><th className="pb-1">Proof</th></tr></thead>
+              <tbody>
+                {expenseItems.map(item => { const att = getAtt(item.id); return (
+                  <tr key={item.id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-2">{item.manual_reference || "—"}</td>
+                    <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                    <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
+                  </tr>); })}
+                <tr className="font-bold border-t"><td className="py-2">TOTAL EXPENSES</td><td className="py-2 text-right">R{expensesTotal.toFixed(2)}</td><td></td></tr>
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Grand Total */}
+      <Card className="bg-muted/30">
+        <CardContent className="py-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-bold">Grand Total (Income - Expenses)</span>
+            <span className="font-bold text-lg text-primary">R{(grandIncome - expensesTotal).toFixed(2)}</span>
+          </div>
+          <div className="flex gap-4 mt-2 text-[10px] text-muted-foreground">
+            <span>Members: R{membersT.toFixed(2)}</span>
+            <span>Officers: R{officersT.toFixed(2)}</span>
+            <span>Burial: R{burialTotal.toFixed(2)}</span>
+            <span>Expenses: R{expensesTotal.toFixed(2)}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Audit Decision */}
+      {period.status === "Submitted" && (canApprove || canReject) && (
+        <Card className={allChecked ? "border-green-300" : "border-orange-200"}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs">Audit Decision</CardTitle>
+            {!allChecked && <p className="text-[10px] text-orange-600">Please verify all sections above before approving.</p>}
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Checklist summary */}
+            <div className="flex gap-3 text-[10px]">
+              <span className={checkedBanking ? "text-green-700" : "text-muted-foreground"}>✓ Banking</span>
+              <span className={checkedCash ? "text-green-700" : "text-muted-foreground"}>✓ Cash</span>
+              <span className={checkedBurial ? "text-green-700" : "text-muted-foreground"}>✓ Burial</span>
+              <span className={checkedExpenses ? "text-green-700" : "text-muted-foreground"}>✓ Expenses</span>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Comment {canReject ? "(mandatory for rejection)" : "(optional)"}</Label>
+              <Input className="h-9 text-xs" value={comment} onChange={e => setComment(e.target.value)} placeholder="Audit comment..." />
+            </div>
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="flex gap-3">
+              {canApprove && <Button size="sm" className="bg-green-700 hover:bg-green-800" onClick={handleApprove} disabled={processing || !allChecked}>{processing ? "..." : "Approve"}</Button>}
+              {canReject && <Button size="sm" variant="destructive" onClick={handleReject} disabled={processing || !comment.trim()}>{processing ? "..." : "Reject"}</Button>}
+            </div>
+            {canApprove && !allChecked && <p className="text-[10px] text-muted-foreground">All 4 section checkboxes must be verified to approve.</p>}
+            {canReject && !comment.trim() && <p className="text-[10px] text-muted-foreground">Comment required to reject.</p>}
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
