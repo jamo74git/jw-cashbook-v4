@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess, hasPermission, isOverrideAction, logSelfReviewException, logAuditAction } from "@/lib/permissions";
-import { AppHeader } from "@/components/AppHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -110,13 +109,15 @@ export default function AuditReviewPage() {
     router.push("/audit");
   }
 
-  if (loading) return <><AppHeader /><div className="p-6 text-sm text-muted-foreground">Loading audit...</div></>;
-  if (!period) return <><AppHeader /><div className="p-6 text-sm text-destructive">Period not found.</div></>;
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading audit...</div>;
+  if (!period) return <div className="p-6 text-sm text-destructive">Period not found.</div>;
 
   return (
     <>
-      <AppHeader />
       <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
+        {/* Back button */}
+        <Button variant="outline" size="sm" onClick={() => router.push("/audit")}>← Back to Audit Queue</Button>
+
         {/* Audit Banner */}
         <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between">
           <div>
