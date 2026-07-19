@@ -14,8 +14,17 @@ interface Officer { id: string; officer_code: string; first_name: string; last_n
 interface Congregation { id: string; name: string; code: string; overseership_id: string | null; }
 interface HierarchyNode { id: string; name: string; level_type: string; parent_id: string | null; }
 
-const RANKS = ["Priest", "Underdeacon", "Elder", "Overseer", "Evangelist", "Prophet", "Apostle"] as const;
+// Sort sequence as requested
+const RANKS = ["Underdeacon", "Priest", "Elder", "Evangelist", "Overseer", "Prophet", "Apostle"] as const;
+const RANK_ORDER: Record<string, number> = { Underdeacon: 0, Priest: 1, Elder: 2, Evangelist: 3, Overseer: 4, Prophet: 5, Apostle: 6 };
 const SERVICE_STATUSES = ["serving", "resting", "freedom_of_city"] as const;
+
+function serviceLabel(s: string | null) {
+  if (!s || s === "serving") return "Serving";
+  if (s === "resting") return "Resting";
+  if (s === "freedom_of_city") return "Freedom of the City";
+  return s;
+}
 
 export default function OfficersPage() {
   const supabase = createClient();
@@ -31,6 +40,7 @@ export default function OfficersPage() {
   // Filters
   const [filterOverseership, setFilterOverseership] = useState("");
   const [filterCongregation, setFilterCongregation] = useState("");
+  const [filterRank, setFilterRank] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [showInactive, setShowInactive] = useState(false);
 
@@ -42,6 +52,8 @@ export default function OfficersPage() {
   const [newRank, setNewRank] = useState<string>("Priest");
   const [newCongId, setNewCongId] = useState("");
   const [newServiceStatus, setNewServiceStatus] = useState<string>("serving");
+  const [createFilterOverseership, setCreateFilterOverseership] = useState("");
+  const [createSearchCong, setCreateSearchCong] = useState("");
 
   // Edit
   const [editId, setEditId] = useState<string | null>(null);
@@ -80,9 +92,21 @@ export default function OfficersPage() {
     return congregations;
   }, [congregations, filterOverseership]);
 
+  // Create form: congregations filtered by overseership + search
+  const createCongs = useMemo(() => {
+    let list = congregations;
+    if (createFilterOverseership) list = list.filter(c => c.overseership_id === createFilterOverseership);
+    if (createSearchCong.trim()) {
+      const term = createSearchCong.toLowerCase();
+      list = list.filter(c => c.name.toLowerCase().includes(term) || c.code.toLowerCase().includes(term));
+    }
+    return list;
+  }, [congregations, createFilterOverseership, createSearchCong]);
+
   const filteredOfficers = useMemo(() => {
     let list = officers;
     if (!showInactive) list = list.filter(o => o.is_active);
+    if (filterRank) list = list.filter(o => o.rank === filterRank);
     if (filterCongregation) list = list.filter(o => o.congregation_id === filterCongregation);
     else if (filterOverseership) {
       const congIds = filteredCongs.map(c => c.id);
@@ -96,8 +120,15 @@ export default function OfficersPage() {
         (o.last_name?.toLowerCase().includes(term) ?? false)
       );
     }
+    // Sort by rank order then officer_code
+    list = [...list].sort((a, b) => {
+      const ra = RANK_ORDER[a.rank] ?? 99;
+      const rb = RANK_ORDER[b.rank] ?? 99;
+      if (ra !== rb) return ra - rb;
+      return a.officer_code.localeCompare(b.officer_code);
+    });
     return list;
-  }, [officers, showInactive, filterCongregation, filterOverseership, filteredCongs, searchTerm]);
+  }, [officers, showInactive, filterRank, filterCongregation, filterOverseership, filteredCongs, searchTerm]);
 
   function getCongName(congId: string) {
     const c = congregations.find(x => x.id === congId);
@@ -111,19 +142,30 @@ export default function OfficersPage() {
       return;
     }
     setSaving(true);
-    const { error: insertErr } = await supabase.from("officers").insert({
-      officer_code: newCode.trim(),
-      first_name: newFirst.trim(),
-      last_name: newLast.trim() || null,
-      rank: newRank,
-      congregation_id: newCongId,
-      is_active: true,
-      service_status: newServiceStatus,
+
+    // Use session token to call an API that uses service_role (bypass RLS)
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) { setError("Session expired"); setSaving(false); return; }
+
+    const res = await fetch("/api/admin/create-officer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+      body: JSON.stringify({
+        officer_code: newCode.trim(),
+        first_name: newFirst.trim(),
+        last_name: newLast.trim() || null,
+        rank: newRank,
+        congregation_id: newCongId,
+        service_status: newServiceStatus,
+      }),
     });
+    const data = await res.json();
     setSaving(false);
-    if (insertErr) { setError(insertErr.message); return; }
+    if (!res.ok) { setError(data.error ?? "Failed to create officer"); return; }
+
     setToast(`Officer ${newCode.trim()} created`);
     setNewCode(""); setNewFirst(""); setNewLast(""); setNewCongId(""); setNewServiceStatus("serving");
+    setCreateFilterOverseership(""); setCreateSearchCong("");
     setShowCreate(false);
     await loadData();
   }
@@ -154,7 +196,7 @@ export default function OfficersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold">Officer Management</h1>
-          <p className="text-xs text-muted-foreground">Create, reassign, and manage Priests and Underdeacons.</p>
+          <p className="text-xs text-muted-foreground">Create, reassign, and manage all officers across the organisation.</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={() => setShowCreate(!showCreate)}>{showCreate ? "Cancel" : "+ New Officer"}</Button>
@@ -190,17 +232,34 @@ export default function OfficersPage() {
                 <Input className="h-8 text-xs" value={newLast} onChange={e => setNewLast(e.target.value)} />
               </div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Congregation *</Label>
-              <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newCongId} onChange={e => setNewCongId(e.target.value)}>
-                <option value="">Select congregation...</option>
-                {congregations.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
-              </select>
+            {/* Congregation selection with filter */}
+            <div className="space-y-2 rounded border border-dashed border-muted-foreground/30 p-3">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Find Congregation</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-0.5">
+                  <Label className="text-[10px] text-muted-foreground">Overseership</Label>
+                  <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={createFilterOverseership} onChange={e => { setCreateFilterOverseership(e.target.value); setNewCongId(""); }}>
+                    <option value="">All</option>
+                    {overseerships.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-0.5">
+                  <Label className="text-[10px] text-muted-foreground">Search</Label>
+                  <Input className="h-8 text-xs" placeholder="Name or code..." value={createSearchCong} onChange={e => setCreateSearchCong(e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-xs">Congregation * <span className="text-muted-foreground font-normal">({createCongs.length} available)</span></Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newCongId} onChange={e => setNewCongId(e.target.value)}>
+                  <option value="">Select congregation...</option>
+                  {createCongs.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+                </select>
+              </div>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Service Status</Label>
               <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newServiceStatus} onChange={e => setNewServiceStatus(e.target.value)}>
-                {SERVICE_STATUSES.map(s => <option key={s} value={s}>{s === "freedom_of_city" ? "Freedom of the City" : s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                {SERVICE_STATUSES.map(s => <option key={s} value={s}>{serviceLabel(s)}</option>)}
               </select>
             </div>
             <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Officer"}</Button>
@@ -211,7 +270,7 @@ export default function OfficersPage() {
       {/* Filters */}
       <Card>
         <CardContent className="py-3">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
             <div className="space-y-0.5">
               <Label className="text-[10px] text-muted-foreground">Overseership</Label>
               <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterOverseership} onChange={e => { setFilterOverseership(e.target.value); setFilterCongregation(""); }}>
@@ -224,6 +283,13 @@ export default function OfficersPage() {
               <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterCongregation} onChange={e => setFilterCongregation(e.target.value)}>
                 <option value="">All</option>
                 {filteredCongs.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-0.5">
+              <Label className="text-[10px] text-muted-foreground">Rank</Label>
+              <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterRank} onChange={e => setFilterRank(e.target.value)}>
+                <option value="">All</option>
+                {RANKS.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             </div>
             <div className="space-y-0.5">
@@ -264,13 +330,20 @@ export default function OfficersPage() {
                 </thead>
                 <tbody>
                   {filteredOfficers.map(o => (
-                    <tr key={o.id} className="border-b last:border-0 hover:bg-muted/30">
+                    <tr key={o.id} className={`border-b last:border-0 ${!o.is_active ? "bg-red-50/50" : "hover:bg-muted/30"}`}>
                       <td className="py-2 pr-3 font-mono font-medium">{o.officer_code}</td>
                       <td className="py-2 pr-3">{o.first_name} {o.last_name ?? ""}</td>
                       <td className="py-2 pr-3"><Badge variant="outline" className="text-[9px]">{o.rank}</Badge></td>
                       <td className="py-2 pr-3">
-                        <Badge variant={o.service_status === "serving" ? "default" : o.service_status === "resting" ? "secondary" : "outline"} className="text-[9px]">
-                          {o.service_status === "freedom_of_city" ? "FoC" : o.service_status ?? "serving"}
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] ${
+                            o.service_status === "serving" ? "bg-green-50 text-green-700 border-green-300" :
+                            o.service_status === "resting" ? "bg-amber-50 text-amber-700 border-amber-300" :
+                            o.service_status === "freedom_of_city" ? "bg-blue-50 text-blue-700 border-blue-300" : ""
+                          }`}
+                        >
+                          {serviceLabel(o.service_status)}
                         </Badge>
                       </td>
                       <td className="py-2 pr-3 text-muted-foreground">
@@ -286,7 +359,7 @@ export default function OfficersPage() {
                         ) : getCongName(o.congregation_id)}
                       </td>
                       <td className="py-2 pr-3">
-                        <Badge variant={o.is_active ? "default" : "secondary"} className="text-[9px]">
+                        <Badge variant={o.is_active ? "default" : "destructive"} className={`text-[9px] ${!o.is_active ? "bg-red-100 text-red-700 border-red-300" : ""}`}>
                           {o.is_active ? "Active" : "Inactive"}
                         </Badge>
                       </td>
