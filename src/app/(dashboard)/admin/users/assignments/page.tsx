@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import type { UserHierarchyAccess } from "@/lib/types";
 
@@ -13,33 +15,31 @@ interface UserRow {
   email: string;
   role: string;
   scope_level: string;
+  congregation_id: string | null;
   congregation_ids: string[];
 }
 
-interface Congregation {
-  id: string;
-  name: string;
-  code: string;
-}
-
-interface Assignment {
-  id: string;
-  user_id: string;
-  congregation_id: string;
-  status: string;
-}
+interface Congregation { id: string; name: string; code: string; overseership_id: string | null; }
+interface HierarchyNode { id: string; name: string; level_type: string; parent_id: string | null; }
+interface Assignment { id: string; user_id: string; congregation_id: string; status: string; }
 
 export default function AssignmentsPage() {
   const supabase = createClient();
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [congregations, setCongregations] = useState<Congregation[]>([]);
+  const [hierarchyNodes, setHierarchyNodes] = useState<HierarchyNode[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
+
+  // Filters
   const [filterRole, setFilterRole] = useState<string>("All");
+  const [filterOverseership, setFilterOverseership] = useState("");
+  const [filterCongregation, setFilterCongregation] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); } }, [toast]);
 
@@ -56,9 +56,11 @@ export default function AssignmentsPage() {
   async function loadData() {
     setLoading(true);
 
-    // Load all congregations
-    const { data: congs } = await supabase.from("congregations").select("id, name, code").order("name");
+    const { data: congs } = await supabase.from("congregations").select("id, name, code, overseership_id").order("name");
     setCongregations(congs ?? []);
+
+    const { data: nodes } = await supabase.from("hierarchy_levels").select("id, name, level_type, parent_id").order("name");
+    setHierarchyNodes(nodes ?? []);
 
     // Get session token for API calls
     const { data: { session } } = await supabase.auth.getSession();
@@ -79,11 +81,12 @@ export default function AssignmentsPage() {
     setAssignments(assignRows ?? []);
 
     if (userData.users) {
-      const userList: UserRow[] = userData.users.map((u: { user_id: string; email: string; role: string; scope_level: string }) => ({
+      const userList: UserRow[] = userData.users.map((u: { user_id: string; email: string; role: string; scope_level: string; congregation_id: string | null }) => ({
         user_id: u.user_id,
         email: u.email,
         role: u.role,
         scope_level: u.scope_level,
+        congregation_id: u.congregation_id,
         congregation_ids: (assignRows ?? []).filter(a => a.user_id === u.user_id).map(a => a.congregation_id),
       }));
       setUsers(userList);
@@ -92,17 +95,40 @@ export default function AssignmentsPage() {
     setLoading(false);
   }
 
+  // Derived filters
+  const overseerships = useMemo(() => hierarchyNodes.filter(n => n.level_type === "Overseership"), [hierarchyNodes]);
+
+  const filteredCongsForFilter = useMemo(() => {
+    if (filterOverseership) return congregations.filter(c => c.overseership_id === filterOverseership);
+    return congregations;
+  }, [congregations, filterOverseership]);
+
+  const filteredUsers = useMemo(() => {
+    let list = users;
+    if (filterRole !== "All") list = list.filter(u => u.role === filterRole);
+    if (filterCongregation) {
+      // Show users assigned to this congregation OR whose primary congregation_id matches
+      list = list.filter(u => u.congregation_ids.includes(filterCongregation) || u.congregation_id === filterCongregation);
+    } else if (filterOverseership) {
+      const congIds = filteredCongsForFilter.map(c => c.id);
+      list = list.filter(u => u.congregation_ids.some(id => congIds.includes(id)) || (u.congregation_id && congIds.includes(u.congregation_id)));
+    }
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      list = list.filter(u => u.email.toLowerCase().includes(term));
+    }
+    return list;
+  }, [users, filterRole, filterCongregation, filterOverseership, filteredCongsForFilter, searchTerm]);
+
   async function toggleAssignment(userId: string, congregationId: string) {
     setSaving(true);
     const existing = assignments.find(a => a.user_id === userId && a.congregation_id === congregationId);
 
     if (existing) {
-      // Remove assignment
       await supabase.from("user_congregation_assignments").delete().eq("id", existing.id);
       setAssignments(prev => prev.filter(a => a.id !== existing.id));
       setToast("Assignment removed");
     } else {
-      // Add assignment
       const { data: { user } } = await supabase.auth.getUser();
       const { data: newRow } = await supabase
         .from("user_congregation_assignments")
@@ -124,9 +150,7 @@ export default function AssignmentsPage() {
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
   if (access?.role !== "HO") return <div className="p-6 text-sm text-destructive">Access denied. HO only.</div>;
 
-  const roles = ["All", ...new Set(users.map(u => u.role))];
-  const filteredUsers = filterRole === "All" ? users : users.filter(u => u.role === filterRole);
-
+  const roles = ["All", ...Array.from(new Set(users.map(u => u.role)))];
   const selectedUserData = users.find(u => u.user_id === selectedUser);
 
   return (
@@ -142,15 +166,40 @@ export default function AssignmentsPage() {
 
         {toast && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800">{toast}</div>}
 
-        {/* Role filter */}
-        <div className="flex gap-2 items-center">
-          <span className="text-xs text-muted-foreground">Filter by role:</span>
-          {roles.map(r => (
-            <Button key={r} size="sm" variant={filterRole === r ? "default" : "outline"} className="h-7 text-xs" onClick={() => setFilterRole(r)}>
-              {r}
-            </Button>
-          ))}
-        </div>
+        {/* Filters */}
+        <Card>
+          <CardContent className="py-3">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+              <div className="space-y-0.5">
+                <Label className="text-[10px] text-muted-foreground">Role</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterRole} onChange={e => setFilterRole(e.target.value)}>
+                  {roles.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-[10px] text-muted-foreground">Overseership</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterOverseership} onChange={e => { setFilterOverseership(e.target.value); setFilterCongregation(""); }}>
+                  <option value="">All</option>
+                  {overseerships.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-[10px] text-muted-foreground">Congregation</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={filterCongregation} onChange={e => setFilterCongregation(e.target.value)}>
+                  <option value="">All</option>
+                  {filteredCongsForFilter.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-[10px] text-muted-foreground">Search email</Label>
+                <Input className="h-8 text-xs" placeholder="Type to search..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+              </div>
+              <div className="flex items-end">
+                <p className="text-xs text-muted-foreground">{filteredUsers.length} user{filteredUsers.length !== 1 ? "s" : ""}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Grid view: users × congregations */}
         <Card>
@@ -179,6 +228,7 @@ export default function AssignmentsPage() {
                     </div>
                   </button>
                 ))}
+                {filteredUsers.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No users match filters</p>}
               </div>
 
               {/* Right: Congregation checkboxes */}

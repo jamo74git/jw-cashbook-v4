@@ -173,7 +173,7 @@ export default function CapturePage() {
 
     // Fetch officers (once)
     const { data: off } = await supabase.from("officers").select("id, officer_code, first_name, last_name")
-      .eq("congregation_id", ua.congregation_id).eq("is_active", true).order("officer_code");
+      .eq("congregation_id", ua.congregation_id).eq("is_active", true).in("rank", ["Priest", "Underdeacon"]).order("officer_code");
     setOfficers(off ?? []);
 
     // Fetch line items + attachments

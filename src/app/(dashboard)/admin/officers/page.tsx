@@ -10,11 +10,12 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import type { UserHierarchyAccess } from "@/lib/types";
 
-interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; rank: string; congregation_id: string; is_active: boolean; }
+interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; rank: string; congregation_id: string; is_active: boolean; service_status: string | null; }
 interface Congregation { id: string; name: string; code: string; overseership_id: string | null; }
 interface HierarchyNode { id: string; name: string; level_type: string; parent_id: string | null; }
 
-const RANKS = ["Priest", "Underdeacon"] as const;
+const RANKS = ["Priest", "Underdeacon", "Elder", "Overseer", "Evangelist", "Prophet", "Apostle"] as const;
+const SERVICE_STATUSES = ["serving", "resting", "freedom_of_city"] as const;
 
 export default function OfficersPage() {
   const supabase = createClient();
@@ -40,6 +41,7 @@ export default function OfficersPage() {
   const [newLast, setNewLast] = useState("");
   const [newRank, setNewRank] = useState<string>("Priest");
   const [newCongId, setNewCongId] = useState("");
+  const [newServiceStatus, setNewServiceStatus] = useState<string>("serving");
 
   // Edit
   const [editId, setEditId] = useState<string | null>(null);
@@ -116,11 +118,12 @@ export default function OfficersPage() {
       rank: newRank,
       congregation_id: newCongId,
       is_active: true,
+      service_status: newServiceStatus,
     });
     setSaving(false);
     if (insertErr) { setError(insertErr.message); return; }
     setToast(`Officer ${newCode.trim()} created`);
-    setNewCode(""); setNewFirst(""); setNewLast(""); setNewCongId("");
+    setNewCode(""); setNewFirst(""); setNewLast(""); setNewCongId(""); setNewServiceStatus("serving");
     setShowCreate(false);
     await loadData();
   }
@@ -194,6 +197,12 @@ export default function OfficersPage() {
                 {congregations.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
               </select>
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Service Status</Label>
+              <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newServiceStatus} onChange={e => setNewServiceStatus(e.target.value)}>
+                {SERVICE_STATUSES.map(s => <option key={s} value={s}>{s === "freedom_of_city" ? "Freedom of the City" : s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+              </select>
+            </div>
             <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Officer"}</Button>
           </CardContent>
         </Card>
@@ -247,6 +256,7 @@ export default function OfficersPage() {
                     <th className="pb-2 pr-3">Code</th>
                     <th className="pb-2 pr-3">Name</th>
                     <th className="pb-2 pr-3">Rank</th>
+                    <th className="pb-2 pr-3">Service</th>
                     <th className="pb-2 pr-3">Congregation</th>
                     <th className="pb-2 pr-3">Status</th>
                     <th className="pb-2">Actions</th>
@@ -258,6 +268,11 @@ export default function OfficersPage() {
                       <td className="py-2 pr-3 font-mono font-medium">{o.officer_code}</td>
                       <td className="py-2 pr-3">{o.first_name} {o.last_name ?? ""}</td>
                       <td className="py-2 pr-3"><Badge variant="outline" className="text-[9px]">{o.rank}</Badge></td>
+                      <td className="py-2 pr-3">
+                        <Badge variant={o.service_status === "serving" ? "default" : o.service_status === "resting" ? "secondary" : "outline"} className="text-[9px]">
+                          {o.service_status === "freedom_of_city" ? "FoC" : o.service_status ?? "serving"}
+                        </Badge>
+                      </td>
                       <td className="py-2 pr-3 text-muted-foreground">
                         {editId === o.id ? (
                           <div className="flex gap-1 items-center">

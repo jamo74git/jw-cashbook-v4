@@ -36,12 +36,20 @@ export default function CongregationsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Filters
   const [filterOverseership, setFilterOverseership] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
-  // Edit modal
+  // Create form
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newCode, setNewCode] = useState("");
+  const [newOverseership, setNewOverseership] = useState("");
+  const [newEldership, setNewEldership] = useState("");
+
+  // Edit panel
   const [editCong, setEditCong] = useState<Congregation | null>(null);
   const [editForm, setEditForm] = useState({
     property_status: "unknown",
@@ -78,6 +86,11 @@ export default function CongregationsPage() {
   }
 
   const overseerships = useMemo(() => hierarchyNodes.filter(n => n.level_type === "Overseership"), [hierarchyNodes]);
+  const elderships = useMemo(() => {
+    let nodes = hierarchyNodes.filter(n => n.level_type === "Eldership");
+    if (newOverseership) nodes = nodes.filter(n => n.parent_id === newOverseership);
+    return nodes;
+  }, [hierarchyNodes, newOverseership]);
 
   const filteredCongs = useMemo(() => {
     let list = congregations;
@@ -101,11 +114,12 @@ export default function CongregationsPage() {
     return o ? `${o.officer_code} — ${o.first_name} ${o.last_name ?? ""}`.trim() : "Unknown";
   }
 
-  // Get eligible elders for a congregation (officers in the same overseership)
+  // Get eligible Elders for admin assignment (only officers with rank Elder in the overseership)
   function getEligibleElders(cong: Congregation) {
-    if (!cong.overseership_id) return officers;
+    const elders = officers.filter(o => o.rank === "Elder");
+    if (!cong.overseership_id) return elders;
     const congIds = congregations.filter(c => c.overseership_id === cong.overseership_id).map(c => c.id);
-    return officers.filter(o => congIds.includes(o.congregation_id));
+    return elders.filter(o => congIds.includes(o.congregation_id));
   }
 
   function openEdit(cong: Congregation) {
@@ -140,6 +154,31 @@ export default function CongregationsPage() {
     await loadData();
   }
 
+  async function handleCreate() {
+    setError(null);
+    if (!newName.trim() || !newCode.trim()) {
+      setError("Congregation name and code are required");
+      return;
+    }
+    if (!newOverseership) {
+      setError("Please select an overseership");
+      return;
+    }
+    setSaving(true);
+    const { error: insertErr } = await supabase.from("congregations").insert({
+      name: newName.trim(),
+      code: newCode.trim(),
+      overseership_id: newOverseership,
+      eldership_id: newEldership || null,
+    });
+    setSaving(false);
+    if (insertErr) { setError(insertErr.message); return; }
+    setToast(`Congregation "${newName.trim()}" created`);
+    setNewName(""); setNewCode(""); setNewOverseership(""); setNewEldership("");
+    setShowCreate(false);
+    await loadData();
+  }
+
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
   if (access?.role !== "HO") return <div className="p-6 text-sm text-destructive">Access denied. HO only.</div>;
 
@@ -148,12 +187,50 @@ export default function CongregationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold">Congregation Management</h1>
-          <p className="text-xs text-muted-foreground">View and edit congregation details, property info, and admin assignments.</p>
+          <p className="text-xs text-muted-foreground">Create, edit, and manage congregation details.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => window.history.back()}>← Back</Button>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => setShowCreate(!showCreate)}>{showCreate ? "Cancel" : "+ New Congregation"}</Button>
+          <Button variant="outline" size="sm" onClick={() => window.history.back()}>← Back</Button>
+        </div>
       </div>
 
       {toast && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800">{toast}</div>}
+      {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">{error}</div>}
+
+      {/* Create Congregation Form */}
+      {showCreate && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">New Congregation</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Congregation Name *</Label>
+                <Input className="h-8 text-xs" placeholder="e.g. Bosmont" value={newName} onChange={e => setNewName(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Code *</Label>
+                <Input className="h-8 text-xs" placeholder="e.g. 020700" value={newCode} onChange={e => setNewCode(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Overseership *</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newOverseership} onChange={e => { setNewOverseership(e.target.value); setNewEldership(""); }}>
+                  <option value="">Select overseership...</option>
+                  {overseerships.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Eldership</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newEldership} onChange={e => setNewEldership(e.target.value)}>
+                  <option value="">Select eldership...</option>
+                  {elderships.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Congregation"}</Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card>
