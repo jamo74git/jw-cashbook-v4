@@ -78,6 +78,7 @@ export default function ElderDashboard() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const allPeriodsRef = useRef<{ id: string; congregation_id: string; week: number; service: string; status: string }[]>([]);
+  const itemsRef = useRef<{ id: string; period_id: string; is_officer: boolean; item_type: string; amount: number }[]>([]);
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
@@ -139,6 +140,7 @@ export default function ElderDashboard() {
       ? await supabase.from("cashbook_line_item").select("id, period_id, section, is_officer, item_type, amount, officer_id, proof_status").in("period_id", periodIds)
       : { data: [] };
     const items = allItems ?? [];
+    itemsRef.current = items;
 
     // Get officers
     const { data: officers } = await supabase.from("officers").select("id, officer_code, congregation_id").in("congregation_id", congIds).eq("is_active", true);
@@ -424,28 +426,38 @@ export default function ElderDashboard() {
                                 <tr key={`${r.congId}-w${wk}-none`} className="border-b bg-gray-50">
                                   <td></td>
                                   <td className="px-2 py-1 pl-8 text-muted-foreground">Week {wk}</td>
-                                  <td className="px-2 py-1 text-center text-[10px] text-gray-400" colSpan={5}>—</td>
-                                  <td className="px-2 py-1"><Badge variant="outline" className="text-[8px] bg-gray-50 text-gray-400 border-gray-200">Not Captured</Badge></td>
+                                  <td className="px-2 py-1 text-center text-[10px] text-gray-400">—</td>
+                                  <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                  <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                  <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                  <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                  <td className="px-2 py-1"><Badge variant="outline" className="text-[8px] text-gray-400 border-gray-200">Not Captured</Badge></td>
                                 </tr>
                               );
                             }
                             return weekPeriods.map(wp => {
+                              // Calculate per-service values from line items
+                              const wItems = itemsRef.current.filter(li => li.period_id === wp.id);
+                              const wMembers = wItems.filter(i => !i.is_officer && ["EFT","Cash","DirectDebit","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+                              const wOfficers = wItems.filter(i => i.is_officer && ["EFT","Cash","DirectDebit","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0);
+                              const wBurial = wItems.filter(i => i.item_type === "Burial").reduce((s,i)=>s+Number(i.amount),0);
+                              const wExpenses = wItems.filter(i => i.item_type === "Expense").reduce((s,i)=>s+Number(i.amount),0);
                               const rowBg = wp.status === "AuditApproved" ? "bg-green-50/50" : wp.status === "Submitted" ? "bg-orange-50/50" : wp.status === "Rejected" ? "bg-red-50/50" : "";
                               return (
                                 <tr key={`${r.congId}-w${wk}-${wp.service}`} className={`border-b text-muted-foreground ${rowBg}`}>
                                   <td></td>
                                   <td className="px-2 py-1 pl-8">Wk {wk} {wp.service}</td>
                                   <td className="px-2 py-1 text-center">—</td>
-                                  <td className="px-2 py-1 text-right">—</td>
-                                  <td className="px-2 py-1 text-right">—</td>
-                                  <td className="px-2 py-1 text-right">—</td>
-                                  <td className="px-2 py-1 text-right">—</td>
+                                  <td className="px-2 py-1 text-right">{wMembers > 0 ? `R${wMembers.toFixed(2)}` : "—"}</td>
+                                  <td className="px-2 py-1 text-right">{wOfficers > 0 ? `R${wOfficers.toFixed(2)}` : "—"}</td>
+                                  <td className="px-2 py-1 text-right">{wBurial > 0 ? `R${wBurial.toFixed(2)}` : "—"}</td>
+                                  <td className="px-2 py-1 text-right">{wExpenses > 0 ? `R${wExpenses.toFixed(2)}` : "—"}</td>
                                   <td className="px-2 py-1">
                                     <Badge variant="outline" className={`text-[8px] ${
                                       wp.status === "AuditApproved" ? "text-green-700 border-green-300" :
                                       wp.status === "Submitted" ? "text-orange-700 border-orange-300" :
                                       wp.status === "Rejected" ? "text-red-700 border-red-300" :
-                                      wp.status === "Draft" ? "text-gray-600 border-gray-300" : ""
+                                      "text-gray-600 border-gray-300"
                                     }`}>
                                       {wp.status === "AuditApproved" ? "Approved" : wp.status === "Submitted" ? "Pending" : wp.status}
                                     </Badge>
