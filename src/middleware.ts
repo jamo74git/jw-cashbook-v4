@@ -15,6 +15,7 @@ const ROUTE_ROLE_MAP: Record<string, string[]> = {
   "/monthly-close": ["Elder", "Overseer", "HO"],             // Monthly close
   "/census": ["Treasurer", "Elder", "Chairperson", "HO", "Apostle", "Overseer", "Secretary"],
   "/admin": ["HO"],                                          // HO admin only
+  "/settings": ["Elder", "Chairperson", "HO"],               // Congregation settings
   "/reports": [],                                            // All roles (export gated in-page)
   "/messages": [],                                           // All except Secretary (gated in-page)
   "/treasurer": ["Treasurer"],                               // Treasurer dashboard

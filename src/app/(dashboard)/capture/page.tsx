@@ -541,7 +541,7 @@ export default function CapturePage() {
               <div className="px-2 pb-2 pt-1 space-y-1">
                 {gi.map(item => (
                   <div key={item.id} className="flex items-center gap-2 py-1 border-b last:border-0 text-xs">
-                    <span className="w-16 text-muted-foreground">{item.transaction_date ?? "—"}</span>
+                    <span className="w-20 text-muted-foreground shrink-0">{item.transaction_date ?? "—"}</span>
                     <span className="w-20">{item.item_type === "DirectDebit" ? "DD" : item.item_type}</span>
                     <span className="flex-1 font-medium text-right">R{Number(item.amount).toFixed(2)}</span>
                     <ProofBtn item={item} />
@@ -565,7 +565,7 @@ export default function CapturePage() {
           {/* Expenses List */}
           {activeTab === "Expenses" && tabItems("Expenses").map(item => (
             <div key={item.id} className="flex items-center gap-2 py-2 border-b last:border-0 text-xs">
-              <span className="w-16 text-muted-foreground shrink-0">{item.transaction_date ?? "—"}</span>
+              <span className="w-20 text-muted-foreground shrink-0">{item.transaction_date ?? "—"}</span>
               <span className="flex-1 truncate max-w-[200px]">{item.manual_reference || "—"}</span>
               <span className="w-[120px] text-right font-medium shrink-0">R{Number(item.amount).toFixed(2)}</span>
               <ProofBtn item={item} />

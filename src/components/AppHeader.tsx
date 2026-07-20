@@ -105,7 +105,7 @@ export function AppHeader() {
                   <p className="font-medium">{displayName}</p>
                   <p className="text-muted-foreground">{access?.role} · {access?.scope_level}</p>
                 </div>
-                <button onClick={() => { setShowMenu(false); router.push("/admin/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
+                <button onClick={() => { setShowMenu(false); router.push("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings
                 </button>
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">
