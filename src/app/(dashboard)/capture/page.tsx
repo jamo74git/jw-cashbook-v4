@@ -20,7 +20,7 @@ let PROOF_MANDATORY = false; // Overridden at runtime from DB
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 interface Period { id: string; congregation_id: string; year: number; month: number; week: number; service: string; status: string; week_key: string | null; }
-interface LineItem { id: string; period_id: string; section: string; officer_id: string | null; item_type: string; amount: number; proof_status: string | null; payment_type: string | null; manual_reference: string | null; receipt_number: string | null; is_officer: boolean; }
+interface LineItem { id: string; period_id: string; section: string; officer_id: string | null; item_type: string; amount: number; proof_status: string | null; payment_type: string | null; manual_reference: string | null; receipt_number: string | null; is_officer: boolean; transaction_date: string | null; }
 interface Attachment { id: string; line_item_id: string; file_url: string; transaction_date: string | null; bank_reference: string | null; }
 interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; rank: string; }
 type TabKey = "Members" | "Officers" | "Burial" | "Expenses" | "Banking";
@@ -541,7 +541,8 @@ export default function CapturePage() {
               <div className="px-2 pb-2 pt-1 space-y-1">
                 {gi.map(item => (
                   <div key={item.id} className="flex items-center gap-2 py-1 border-b last:border-0 text-xs">
-                    <span className="w-20">{item.item_type}</span>
+                    <span className="w-16 text-muted-foreground">{item.transaction_date ?? "—"}</span>
+                    <span className="w-20">{item.item_type === "DirectDebit" ? "DD" : item.item_type}</span>
                     <span className="flex-1 font-medium text-right">R{Number(item.amount).toFixed(2)}</span>
                     <ProofBtn item={item} />
                     {canEdit && <button className="text-destructive text-[10px]" onClick={() => deleteRow(item.id)}>✕</button>}
@@ -592,7 +593,7 @@ export default function CapturePage() {
                     const renderGroup = (groupItems: typeof bankingItems, label: string) => groupItems.length === 0 ? null : (<>
                       {groupItems.map(item => { const att = getAtt(item.id); const off = officers.find(o => o.id === item.officer_id); return (
                         <tr key={item.id} className="border-b last:border-0">
-                          <td className="py-1.5 pr-2">{att?.transaction_date ?? "—"}</td>
+                          <td className="py-1.5 pr-2">{att?.transaction_date ?? item.transaction_date ?? "—"}</td>
                           <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
                           <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
                           <td className="py-1.5 pr-2">{off?.officer_code ?? "—"}</td>
