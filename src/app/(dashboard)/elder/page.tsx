@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
@@ -77,6 +77,7 @@ export default function ElderDashboard() {
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const allPeriodsRef = useRef<{ id: string; congregation_id: string; week: number; service: string; status: string }[]>([]);
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
@@ -130,6 +131,7 @@ export default function ElderDashboard() {
     const { data: periods } = await supabase.from("cashbook_period").select("id, congregation_id, week, service, status, created_at")
       .in("congregation_id", congIds).eq("year", year).eq("month", month);
     const allPeriods = periods ?? [];
+    allPeriodsRef.current = allPeriods;
     const periodIds = allPeriods.map(p => p.id);
 
     // Get all line items for these periods
@@ -206,31 +208,50 @@ export default function ElderDashboard() {
     const riskSorted = allPriests.filter(p => (p.membersCash + p.officersCash) > 0).sort((a,b) => (b.membersCash+b.officersCash) - (a.membersCash+a.officersCash)).slice(0, 3);
     setCashRisks(riskSorted.map(p => ({ priestCode: p.officerCode, amount: p.membersCash + p.officersCash, pct: totalAll > 0 ? Math.round(((p.membersCash+p.officersCash)/totalAll)*100) : 0, cashPct: totalC > 0 ? Math.round(((p.membersCash+p.officersCash)/totalC)*100) : 0 })));
 
-    // ─── TAB 4: Audit Log ───────────────────────────────────────────────────
-    // Query audit_log for actions on these periods
-    const { data: auditLogs } = periodIds.length > 0
-      ? await supabase.from("audit_log").select("user_id, action_type, entity_id, comment, metadata").in("entity_id", periodIds).order("created_at", { ascending: false }).limit(20)
-      : { data: [] };
+    // ─── TAB 3: Audit Log ───────────────────────────────────────────────────
+    // Query audit_log for actions on these periods (if table exists)
+    let auditData: AuditRow[] = [];
+    if (periodIds.length > 0) {
+      const { data: auditLogs } = await supabase.from("audit_log")
+        .select("user_id, action_type, entity_id, comment, created_at")
+        .in("entity_id", periodIds)
+        .order("created_at", { ascending: false })
+        .limit(20);
 
-    // Get user emails for the audit log entries
-    const auditUserIds = [...new Set((auditLogs ?? []).map(a => a.user_id))];
-    const userEmails: Record<string, string> = {};
-    if (auditUserIds.length > 0) {
-      const { data: accessRows } = await supabase.from("user_hierarchy_access").select("user_id, role").in("user_id", auditUserIds);
-      (accessRows ?? []).forEach(a => { userEmails[a.user_id] = a.role; });
+      if (auditLogs && auditLogs.length > 0) {
+        // Get user roles for display
+        const auditUserIds = [...new Set(auditLogs.map(a => a.user_id))];
+        const { data: accessRows } = await supabase.from("user_hierarchy_access").select("user_id, role").in("user_id", auditUserIds).eq("status", "active");
+        const userRoles: Record<string, string> = {};
+        (accessRows ?? []).forEach(a => { userRoles[a.user_id] = a.role; });
+
+        auditData = auditLogs.map(a => {
+          const period2 = allPeriods.find(p => p.id === a.entity_id);
+          return {
+            date: new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+            congregation: period2 ? congList.find(c => c.id === period2.congregation_id)?.name ?? "" : "",
+            action: a.action_type === "AUDIT_APPROVE" ? "Approved" : a.action_type === "AUDIT_REJECT" ? "Rejected" : a.action_type === "SUBMIT" ? "Submitted" : a.action_type,
+            week: period2 ? `Wk ${period2.week} ${period2.service}` : "—",
+            comment: a.comment ?? "",
+            by: userRoles[a.user_id] ?? "—",
+          };
+        });
+      }
     }
 
-    setAuditRows((auditLogs ?? []).map(a => {
-      const period2 = allPeriods.find(p => p.id === a.entity_id);
-      return {
+    // Fallback: if no audit_log data, show period status transitions
+    if (auditData.length === 0) {
+      auditData = allPeriods.filter(p => p.status !== "Draft").map(p => ({
         date: "—",
-        congregation: period2 ? congList.find(c => c.id === period2.congregation_id)?.name ?? "" : "",
-        action: a.action_type === "AUDIT_APPROVE" ? "Approved" : a.action_type === "AUDIT_REJECT" ? "Rejected" : a.action_type,
-        week: period2 ? `Wk ${period2.week} ${period2.service}` : "—",
-        comment: a.comment ?? "",
-        by: userEmails[a.user_id] ?? "—",
-      };
-    }));
+        congregation: congList.find(c => c.id === p.congregation_id)?.name ?? "",
+        action: p.status === "AuditApproved" ? "Approved" : p.status === "Submitted" ? "Submitted for Audit" : p.status,
+        week: `Wk ${p.week} ${p.service}`,
+        comment: "",
+        by: "—",
+      }));
+    }
+
+    setAuditRows(auditData);
 
     setLoading(false);
   }
@@ -366,6 +387,7 @@ export default function ElderDashboard() {
                 <table className="w-full text-xs border-collapse">
                   <thead>
                     <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                      <th className="px-2 py-2 w-6"></th>
                       <th className="px-2 py-2 text-left border-r border-white/20">Congregation</th>
                       <th className="px-2 py-2 text-center border-r border-white/20">Weeks</th>
                       <th className="px-2 py-2 text-right border-r border-white/20">Members</th>
@@ -378,20 +400,55 @@ export default function ElderDashboard() {
                   <tbody>
                     {govRows.map(r => {
                       const total = r.membersCash + r.membersDeposit + r.officersCash + r.officersDeposit + r.burial - r.expenses;
+                      const isExp = expanded.has(`sub-${r.congId}`);
                       return (
-                        <tr key={r.congId} className="border-b">
-                          <td className="px-2 py-2 font-medium">{r.congName}</td>
-                          <td className="px-2 py-2 text-center">
-                            <Badge variant={r.capturedWeeks >= r.totalWeeks ? "default" : r.capturedWeeks > 0 ? "secondary" : "outline"} className="text-[9px]">
-                              {r.capturedWeeks}/{r.totalWeeks}
-                            </Badge>
-                          </td>
-                          <td className="px-2 py-2 text-right">R{(r.membersCash + r.membersDeposit).toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right">R{(r.officersCash + r.officersDeposit).toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right">R{r.burial.toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right">R{r.expenses.toFixed(2)}</td>
-                          <td className="px-2 py-2 text-right font-bold">R{total.toFixed(2)}</td>
-                        </tr>
+                        <React.Fragment key={r.congId}>
+                          <tr className="border-b cursor-pointer hover:bg-muted/30" onClick={() => toggleExpand(`sub-${r.congId}`)}>
+                            <td className="px-2 py-2 text-center">{isExp ? "−" : "+"}</td>
+                            <td className="px-2 py-2 font-medium">{r.congName}</td>
+                            <td className="px-2 py-2 text-center">
+                              <Badge variant={r.capturedWeeks >= r.totalWeeks ? "default" : r.capturedWeeks > 0 ? "secondary" : "outline"} className="text-[9px]">
+                                {r.capturedWeeks}/{r.totalWeeks}
+                              </Badge>
+                            </td>
+                            <td className="px-2 py-2 text-right">R{(r.membersCash + r.membersDeposit).toFixed(2)}</td>
+                            <td className="px-2 py-2 text-right">R{(r.officersCash + r.officersDeposit).toFixed(2)}</td>
+                            <td className="px-2 py-2 text-right">R{r.burial.toFixed(2)}</td>
+                            <td className="px-2 py-2 text-right">R{r.expenses.toFixed(2)}</td>
+                            <td className="px-2 py-2 text-right font-bold">R{total.toFixed(2)}</td>
+                          </tr>
+                          {isExp && Array.from({ length: r.totalWeeks }, (_, i) => i + 1).map(wk => {
+                            // Find periods for this week (could be AM, PM, or both)
+                            const weekPeriods = allPeriodsRef.current.filter(p => p.congregation_id === r.congId && p.week === wk);
+                            return weekPeriods.length > 0 ? weekPeriods.map(wp => (
+                              <tr key={`${r.congId}-w${wk}-${wp.service}`} className="border-b text-muted-foreground bg-muted/10">
+                                <td></td>
+                                <td className="px-2 py-1 pl-8">Week {wk} — {wp.service}</td>
+                                <td className="px-2 py-1 text-center" colSpan={5}>
+                                  <Badge variant="outline" className={`text-[9px] ${
+                                    wp.status === "Draft" ? "" :
+                                    wp.status === "Submitted" ? "bg-orange-50 text-orange-700 border-orange-300" :
+                                    wp.status === "AuditApproved" ? "bg-green-50 text-green-700 border-green-300" :
+                                    wp.status === "Rejected" ? "bg-red-50 text-red-700 border-red-300" :
+                                    "bg-blue-50 text-blue-700 border-blue-300"
+                                  }`}>
+                                    {wp.status === "AuditApproved" ? "Approved" : wp.status === "Submitted" ? "Pending Audit" : wp.status}
+                                  </Badge>
+                                </td>
+                                <td></td>
+                              </tr>
+                            )) : (
+                              <tr key={`${r.congId}-w${wk}-none`} className="border-b text-muted-foreground bg-muted/10">
+                                <td></td>
+                                <td className="px-2 py-1 pl-8">Week {wk}</td>
+                                <td className="px-2 py-1 text-center" colSpan={5}>
+                                  <Badge variant="outline" className="text-[9px] bg-gray-50 text-gray-500 border-gray-300">Not Captured</Badge>
+                                </td>
+                                <td></td>
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
