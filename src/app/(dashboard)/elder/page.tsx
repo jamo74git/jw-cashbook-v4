@@ -92,6 +92,13 @@ export default function ElderDashboard() {
 
   useEffect(() => { loadAll(); }, [selectedMonth]);
 
+  // Auto-refresh every 30 seconds to pick up audit status changes
+  useEffect(() => {
+    const interval = setInterval(() => { loadAll(); }, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth]);
+
   async function loadAll() {
     setLoading(true);
     const ua = await getUserAccess();
