@@ -24,7 +24,7 @@ interface SubmissionRow { congId: string; congName: string; membersCash: number;
 // Tab 3: Priest Review
 interface PriestRow { officerCode: string; membersCash: number; membersDeposit: number; priestTotal: number; officersCash: number; officersDeposit: number; officerTotal: number; }
 interface PriestCongRow { congId: string; congName: string; membersCash: number; membersDeposit: number; priestTotal: number; officersCash: number; officersDeposit: number; officerTotal: number; priests: PriestRow[]; }
-interface CashRiskItem { priestCode: string; amount: number; pct: number; }
+interface CashRiskItem { priestCode: string; amount: number; pct: number; cashPct: number; }
 
 // Tab 4: Audit Log
 interface AuditRow { date: string; congregation: string; field: string; oldVal: string; newVal: string; by: string; }
@@ -33,7 +33,7 @@ type TabKey = "governance" | "submission" | "priest" | "risk";
 const TABS: { key: TabKey; label: string }[] = [
   { key: "governance", label: "Governance" },
   { key: "submission", label: "Monthly Submission" },
-  { key: "priest", label: "Priest Review" },
+  { key: "priest", label: "Tithing Review" },
   { key: "risk", label: "Risk & Audit" },
 ];
 
@@ -132,7 +132,7 @@ export default function ElderDashboard() {
     const [year, month] = selectedMonth.split("-").map(Number);
 
     // Get all periods for this month
-    const { data: periods } = await supabase.from("cashbook_period").select("id, congregation_id, week, status, created_at")
+    const { data: periods } = await supabase.from("cashbook_period").select("id, congregation_id, week, service, status, created_at")
       .in("congregation_id", congIds).eq("year", year).eq("month", month);
     const allPeriods = periods ?? [];
     const periodIds = allPeriods.map(p => p.id);
@@ -232,13 +232,30 @@ export default function ElderDashboard() {
     const totalAll = totalC + totalE;
     setTotalCash(totalC); setTotalEFT(totalE); setEldershipTotal(totalAll);
     const riskSorted = allPriests.filter(p => (p.membersCash + p.officersCash) > 0).sort((a,b) => (b.membersCash+b.officersCash) - (a.membersCash+a.officersCash)).slice(0, 3);
-    setCashRisks(riskSorted.map(p => ({ priestCode: p.officerCode, amount: p.membersCash + p.officersCash, pct: totalAll > 0 ? Math.round(((p.membersCash+p.officersCash)/totalAll)*100) : 0 })));
+    setCashRisks(riskSorted.map(p => ({ priestCode: p.officerCode, amount: p.membersCash + p.officersCash, pct: totalAll > 0 ? Math.round(((p.membersCash+p.officersCash)/totalAll)*100) : 0, cashPct: totalC > 0 ? Math.round(((p.membersCash+p.officersCash)/totalC)*100) : 0 })));
 
     // ─── TAB 4: Audit Log ───────────────────────────────────────────────────
-    // For now show period status changes as audit events
-    setAuditRows(allPeriods.filter(p => p.status !== "Draft").map(p => ({
-      date: new Date(p.created_at).toLocaleDateString(), congregation: congList.find(c=>c.id===p.congregation_id)?.name ?? "",
-      field: "status", oldVal: "Draft", newVal: p.status, by: "—"
+    // Show period status changes with audit_comment as the "by" indicator
+    const auditPeriods = allPeriods.filter(p => p.status !== "Draft");
+    // Try to get audit_comment from periods (it stores who approved/rejected)
+    const periodIdsForAudit = auditPeriods.map(p => p.id);
+    const auditComments: Record<string, string> = {};
+    if (periodIdsForAudit.length > 0) {
+      const { data: detailedPeriods } = await supabase.from("cashbook_period")
+        .select("id, audit_comment")
+        .in("id", periodIdsForAudit);
+      if (detailedPeriods) {
+        detailedPeriods.forEach(dp => { if (dp.audit_comment) auditComments[dp.id] = dp.audit_comment; });
+      }
+    }
+
+    setAuditRows(auditPeriods.map(p => ({
+      date: new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
+      congregation: congList.find(c=>c.id===p.congregation_id)?.name ?? "",
+      field: `Week ${p.week} ${p.service}`,
+      oldVal: "Draft",
+      newVal: p.status === "AuditApproved" ? "Approved" : p.status === "Submitted" ? "Submitted for Audit" : p.status,
+      by: auditComments[p.id] ?? "—"
     })));
 
     setLoading(false);
@@ -506,7 +523,10 @@ export default function ElderDashboard() {
                           <p className="text-[10px] font-medium">{i+1}</p>
                           <p className="text-[10px]">{r.priestCode} - R{r.amount.toFixed(0)}</p>
                           <div className="h-4 rounded text-[9px] text-white flex items-center justify-center" style={{ backgroundColor: i === 0 ? C.cashRisk1 : i === 1 ? C.cashRisk2 : C.cashRisk3 }}>
-                            {r.pct}%
+                            {r.pct}% of total
+                          </div>
+                          <div className="h-4 rounded text-[9px] text-white flex items-center justify-center mt-0.5 bg-orange-600">
+                            {r.cashPct}% of cash
                           </div>
                         </div>
                       ))}
