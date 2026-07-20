@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,7 @@ interface Settings { id?: string; congregation_id: string; proof_mandatory: bool
 
 export default function AdminSettingsPage() {
   const supabase = createClient();
+  const router = useRouter();
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,12 +46,44 @@ export default function AdminSettingsPage() {
   }
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
-  if (!role || !["Elder","Chairperson","HO"].includes(role)) return <div className="p-6 text-sm text-destructive">Access denied. Elder/Chair/HO only.</div>;
+
+  // Congregation-level settings (proof, submission rules) — Elder/Chair/HO only
+  const canEditCongSettings = role && ["Elder", "Chairperson", "HO"].includes(role);
+
+  // Role-aware back navigation
+  function handleBack() {
+    if (role === "Elder") router.push("/elder");
+    else if (role === "Chairperson") router.push("/chairperson");
+    else if (role === "Treasurer") router.push("/treasurer");
+    else if (role === "Auditor") router.push("/audit");
+    else if (role === "HO") router.push("/admin");
+    else router.push("/dashboard");
+  }
 
   return (
     <div className="max-w-lg mx-auto px-4 py-6 space-y-6">
-      <h1 className="text-xl font-bold">Congregation Settings</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">Settings</h1>
+        <Button variant="outline" size="sm" onClick={handleBack}>← Back</Button>
+      </div>
 
+      {/* Theme Preference — available to all users */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Display Preference</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">Theme</Label>
+            <select className="h-8 rounded border border-input bg-background px-2 text-xs" value={settings?.theme_default ?? "light"} onChange={e => setSettings(s => s ? { ...s, theme_default: e.target.value } : s)}>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+          <p className="text-[10px] text-muted-foreground">Dark mode support coming soon. This preference will be remembered.</p>
+        </CardContent>
+      </Card>
+
+      {/* Congregation-level settings — Elder/Chair/HO only */}
+      {canEditCongSettings && (
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-sm">Capture & Submission Rules</CardTitle></CardHeader>
         <CardContent className="space-y-4">
@@ -73,7 +107,7 @@ export default function AdminSettingsPage() {
 
           {/* Theme Default */}
           <div className="flex items-center justify-between">
-            <Label className="text-xs">Default Theme</Label>
+            <Label className="text-xs">Default Theme (Congregation)</Label>
             <select className="h-8 rounded border border-input bg-background px-2 text-xs" value={settings?.theme_default ?? "light"} onChange={e => setSettings(s => s ? { ...s, theme_default: e.target.value } : s)}>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
@@ -84,6 +118,7 @@ export default function AdminSettingsPage() {
           {success && <p className="text-xs text-green-600">Settings saved.</p>}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
@@ -17,6 +17,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [elderName, setElderName] = useState("");
   const [overseerName, setOverseerName] = useState("");
   const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -33,6 +34,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
   async function handleSignOut() { await supabase.auth.signOut(); router.push("/login"); }
@@ -54,7 +64,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </div>
           {/* Right: Role + Avatar */}
-          <div className="relative flex items-center gap-2">
+          <div className="relative flex items-center gap-2" ref={menuRef}>
             {access && <Badge variant="secondary" className="text-[10px]">{access.role}</Badge>}
             <button onClick={() => setShowMenu(!showMenu)} className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold hover:bg-primary/90">
               {access?.role?.slice(0, 2).toUpperCase() ?? "??"}
@@ -65,9 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   <p className="font-medium">{access?.role}</p>
                   <p className="text-muted-foreground text-[10px]">{congCode} {congName}</p>
                 </div>
-                {access && ["Elder", "Chairperson", "HO"].includes(access.role) && (
-                  <button onClick={() => { setShowMenu(false); router.push("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">Settings</button>
-                )}
+                <button onClick={() => { setShowMenu(false); router.push("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">Settings</button>
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">Sign Out</button>
               </div>
             )}
