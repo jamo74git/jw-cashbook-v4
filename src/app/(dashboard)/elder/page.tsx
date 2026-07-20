@@ -418,35 +418,41 @@ export default function ElderDashboard() {
                             <td className="px-2 py-2 text-right font-bold">R{total.toFixed(2)}</td>
                           </tr>
                           {isExp && Array.from({ length: r.totalWeeks }, (_, i) => i + 1).map(wk => {
-                            // Find periods for this week (could be AM, PM, or both)
                             const weekPeriods = allPeriodsRef.current.filter(p => p.congregation_id === r.congId && p.week === wk);
-                            return weekPeriods.length > 0 ? weekPeriods.map(wp => (
-                              <tr key={`${r.congId}-w${wk}-${wp.service}`} className="border-b text-muted-foreground bg-muted/10">
-                                <td></td>
-                                <td className="px-2 py-1 pl-8">Week {wk} — {wp.service}</td>
-                                <td className="px-2 py-1 text-center" colSpan={5}>
-                                  <Badge variant="outline" className={`text-[9px] ${
-                                    wp.status === "Draft" ? "" :
-                                    wp.status === "Submitted" ? "bg-orange-50 text-orange-700 border-orange-300" :
-                                    wp.status === "AuditApproved" ? "bg-green-50 text-green-700 border-green-300" :
-                                    wp.status === "Rejected" ? "bg-red-50 text-red-700 border-red-300" :
-                                    "bg-blue-50 text-blue-700 border-blue-300"
-                                  }`}>
-                                    {wp.status === "AuditApproved" ? "Approved" : wp.status === "Submitted" ? "Pending Audit" : wp.status}
-                                  </Badge>
-                                </td>
-                                <td></td>
-                              </tr>
-                            )) : (
-                              <tr key={`${r.congId}-w${wk}-none`} className="border-b text-muted-foreground bg-muted/10">
-                                <td></td>
-                                <td className="px-2 py-1 pl-8">Week {wk}</td>
-                                <td className="px-2 py-1 text-center" colSpan={5}>
-                                  <Badge variant="outline" className="text-[9px] bg-gray-50 text-gray-500 border-gray-300">Not Captured</Badge>
-                                </td>
-                                <td></td>
-                              </tr>
-                            );
+                            if (weekPeriods.length === 0) {
+                              return (
+                                <tr key={`${r.congId}-w${wk}-none`} className="border-b bg-gray-50">
+                                  <td></td>
+                                  <td className="px-2 py-1 pl-8 text-muted-foreground">Week {wk}</td>
+                                  <td className="px-2 py-1 text-center text-[10px] text-gray-400" colSpan={5}>—</td>
+                                  <td className="px-2 py-1"><Badge variant="outline" className="text-[8px] bg-gray-50 text-gray-400 border-gray-200">Not Captured</Badge></td>
+                                </tr>
+                              );
+                            }
+                            return weekPeriods.map(wp => {
+                              const rowBg = wp.status === "AuditApproved" ? "bg-green-50/50" : wp.status === "Submitted" ? "bg-orange-50/50" : wp.status === "Rejected" ? "bg-red-50/50" : "";
+                              return (
+                                <tr key={`${r.congId}-w${wk}-${wp.service}`} className={`border-b text-muted-foreground ${rowBg}`}>
+                                  <td></td>
+                                  <td className="px-2 py-1 pl-8">Wk {wk} {wp.service}</td>
+                                  <td className="px-2 py-1 text-center">—</td>
+                                  <td className="px-2 py-1 text-right">—</td>
+                                  <td className="px-2 py-1 text-right">—</td>
+                                  <td className="px-2 py-1 text-right">—</td>
+                                  <td className="px-2 py-1 text-right">—</td>
+                                  <td className="px-2 py-1">
+                                    <Badge variant="outline" className={`text-[8px] ${
+                                      wp.status === "AuditApproved" ? "text-green-700 border-green-300" :
+                                      wp.status === "Submitted" ? "text-orange-700 border-orange-300" :
+                                      wp.status === "Rejected" ? "text-red-700 border-red-300" :
+                                      wp.status === "Draft" ? "text-gray-600 border-gray-300" : ""
+                                    }`}>
+                                      {wp.status === "AuditApproved" ? "Approved" : wp.status === "Submitted" ? "Pending" : wp.status}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              );
+                            });
                           })}
                         </React.Fragment>
                       );
