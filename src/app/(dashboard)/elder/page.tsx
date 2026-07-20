@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
-import { AppHeader } from "@/components/AppHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import type { UserHierarchyAccess } from "@/lib/types";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -58,12 +59,17 @@ const C = {
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function ElderDashboard() {
   const supabase = createClient();
+  const router = useRouter();
   const [, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [congregations, setCongregations] = useState<Congregation[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("governance");
   const [selectedMonth, setSelectedMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Review panel state
+  const [reviewCongId, setReviewCongId] = useState<string | null>(null);
+  const [reviewPeriods, setReviewPeriods] = useState<{ id: string; week: number; service: string; status: string }[]>([]);
 
   // Tab data
   const [govRows, setGovRows] = useState<GovRow[]>([]);
@@ -249,6 +255,18 @@ export default function ElderDashboard() {
     setExpanded(prev => { const n = new Set(prev); if (n.has(id)) { n.delete(id); } else { n.add(id); } return n; });
   }
 
+  async function handleReview(congId: string) {
+    const [year, month] = selectedMonth.split("-").map(Number);
+    const { data: ps } = await supabase.from("cashbook_period")
+      .select("id, week, service, status")
+      .eq("congregation_id", congId)
+      .eq("year", year)
+      .eq("month", month)
+      .order("week");
+    setReviewPeriods(ps ?? []);
+    setReviewCongId(congId);
+  }
+
   async function handleSubmitAll() {
     setSubmitting(true);
     const congIds = congregations.map(c => c.id);
@@ -257,7 +275,7 @@ export default function ElderDashboard() {
     setSubmitting(false); await loadAll();
   }
 
-  if (loading) return <><AppHeader /><div className="p-6 text-sm text-muted-foreground">Loading...</div></>;
+  if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RENDER
@@ -267,7 +285,6 @@ export default function ElderDashboard() {
 
   return (
     <>
-      <AppHeader />
       <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
         {toast && <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-destructive text-white px-4 py-2 rounded-md text-xs shadow-lg">{toast}</div>}
 
@@ -289,7 +306,7 @@ export default function ElderDashboard() {
         </div>
 
         {/* ─── TAB 1: GOVERNANCE ─── */}
-        {activeTab === "governance" && (
+        {activeTab === "governance" && (<>
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead><tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
@@ -308,12 +325,53 @@ export default function ElderDashboard() {
                   <td className="px-2 py-2 text-center font-bold" style={{ color: C.approved }}>{r.auditApproved || "-"}</td>
                   <td className="px-2 py-2 text-center font-bold" style={{ color: C.submitted }}>{r.submittedToOverseer || "-"}</td>
                   <td className="px-2 py-2 text-center">{r.lastEdit ?? "—"}</td>
-                  <td className="px-2 py-2"><Button size="sm" variant="outline" className="h-6 text-[10px]">Review</Button></td>
+                  <td className="px-2 py-2"><Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => handleReview(congregations.find(c => c.code === r.code)?.id ?? "")}>Review</Button></td>
                 </tr>
               ))}</tbody>
             </table>
           </div>
-        )}
+
+          {/* Review Panel — shows weeks for selected congregation */}
+          {reviewCongId && (
+            <Card className="mt-4 border-primary/40">
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold">
+                    Week Detail: {congregations.find(c => c.id === reviewCongId)?.name ?? ""}
+                  </h3>
+                  <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => setReviewCongId(null)}>✕ Close</Button>
+                </div>
+                {reviewPeriods.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No periods captured this month.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {reviewPeriods.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => router.push(`/audit/${p.id}`)}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded border text-xs hover:bg-muted transition-colors text-left"
+                      >
+                        <span className="font-medium">Week {p.week} — {p.service}</span>
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] ${
+                            p.status === "Draft" ? "" :
+                            p.status === "Submitted" ? "bg-orange-50 text-orange-700 border-orange-300" :
+                            p.status === "AuditApproved" ? "bg-green-50 text-green-700 border-green-300" :
+                            p.status === "Rejected" ? "bg-red-50 text-red-700 border-red-300" :
+                            "bg-blue-50 text-blue-700 border-blue-300"
+                          }`}
+                        >
+                          {p.status === "AuditApproved" ? "Approved" : p.status === "Submitted" ? "Pending Audit" : p.status}
+                        </Badge>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </>)}
 
         {/* ─── TAB 2: MONTHLY SUBMISSION ─── */}
         {activeTab === "submission" && (
@@ -334,7 +392,7 @@ export default function ElderDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {subRows.map(r => (<>
+                  {subRows.map(r => (<React.Fragment key={r.congId}>
                     {/* Congregation total row */}
                     <tr key={r.congId} className="border-b font-medium bg-muted/30">
                       <td className="px-2 py-2 cursor-pointer text-center" onClick={() => toggleExpand(`sub-${r.congId}`)}>{expanded.has(`sub-${r.congId}`) ? "−" : "+"}</td>
@@ -365,7 +423,7 @@ export default function ElderDashboard() {
                         <td></td>
                       </tr>
                     ))}
-                  </>))}
+                  </React.Fragment>))}
                 </tbody>
               </table>
             </div>
@@ -401,7 +459,7 @@ export default function ElderDashboard() {
                   {priestRows.map(c => {
                     const isExp = expanded.has(`pr-${c.congId}`);
                     const congTotal = c.priestTotal + c.officerTotal;
-                    return (<>
+ return (<React.Fragment key={c.congId}>
                       {/* Congregation row */}
                       <tr key={c.congId} className="border-b font-medium">
                         <td className="px-2 py-2 cursor-pointer text-center" onClick={() => toggleExpand(`pr-${c.congId}`)}>{isExp ? "−" : "+"}</td>
@@ -435,7 +493,7 @@ export default function ElderDashboard() {
                           <td className="px-2 py-1 text-right font-medium">{p.officerTotal > 0 ? `R ${p.officerTotal.toFixed(2)}` : "R -"}</td>
                         </tr>
                       ))}
-                    </>);
+ </React.Fragment>);
                   })}
                 </tbody>
               </table>
