@@ -22,7 +22,7 @@ let PROOF_MANDATORY = false; // Overridden at runtime from DB
 interface Period { id: string; congregation_id: string; year: number; month: number; week: number; service: string; status: string; week_key: string | null; }
 interface LineItem { id: string; period_id: string; section: string; officer_id: string | null; item_type: string; amount: number; proof_status: string | null; payment_type: string | null; manual_reference: string | null; receipt_number: string | null; is_officer: boolean; }
 interface Attachment { id: string; line_item_id: string; file_url: string; transaction_date: string | null; bank_reference: string | null; }
-interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; }
+interface Officer { id: string; officer_code: string; first_name: string; last_name: string | null; rank: string; }
 type TabKey = "Members" | "Officers" | "Burial" | "Expenses" | "Banking";
 type FormState = { officerId: string; type: string; amount: string; ref: string; error: string; txnDate: string; txnRef: string; proofFile: File | null };
 
@@ -174,7 +174,7 @@ export default function CapturePage() {
     setPeriod(p);
 
     // Fetch officers (once)
-    const { data: off } = await supabase.from("officers").select("id, officer_code, first_name, last_name")
+    const { data: off } = await supabase.from("officers").select("id, officer_code, first_name, last_name, rank")
       .eq("congregation_id", ua.congregation_id).eq("is_active", true).in("rank", ["Priest", "Underdeacon"]).order("officer_code");
     setOfficers(off ?? []);
 
@@ -462,8 +462,8 @@ export default function CapturePage() {
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
                 {(activeTab === "Members" || activeTab === "Officers") && (
                   <select className="h-9 rounded border border-input bg-background px-2 text-xs" value={form.officerId} onChange={e => { setForm({ officerId: e.target.value, error: "" }); setActiveOfficerId(e.target.value || null); }}>
-                    <option value="">Select Officer *</option>
-                    {officers.map(o => <option key={o.id} value={o.id}>{officerLabel(o)}</option>)}
+                    <option value="">{activeTab === "Members" ? "Select Priest *" : "Select Officer *"}</option>
+                    {(activeTab === "Members" ? officers.filter(o => o.rank === "Priest") : officers).map(o => <option key={o.id} value={o.id}>{officerLabel(o)}</option>)}
                   </select>
                 )}
                 {activeTab === "Burial" && <Input className="h-9 text-xs" placeholder="Receipt Number *" value={form.ref} onChange={e => setForm({ ref: e.target.value, error: "" })} />}
