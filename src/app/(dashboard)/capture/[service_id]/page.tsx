@@ -171,21 +171,69 @@ export default function CaptureViewPage() {
               {(() => {
                 const cashIncomeItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type) && ["Members","Officers"].includes(i.section));
                 const cashBurialItems = items.filter(i => i.item_type === "Burial");
+                const cashBankedItems2 = items.filter(i => i.item_type === "CashBanked");
                 const cashIncomeTotal = cashIncomeItems.reduce((s, i) => s + Number(i.amount), 0);
                 const cashBurialTotal = cashBurialItems.reduce((s, i) => s + Number(i.amount), 0);
-                const cashTotal = cashIncomeTotal + cashBurialTotal;
-                if (cashIncomeItems.length === 0 && cashBurialItems.length === 0) return null;
+                const cashPendingTotal = cashIncomeTotal + cashBurialTotal;
+                const cashBankedTotal = cashBankedItems2.reduce((s, i) => s + Number(i.amount), 0);
+                const bankedAtt = cashBankedItems2.length > 0 ? getAtt(cashBankedItems2[0].id) : null;
+
+                return (
+                  <div className="border-t pt-3 space-y-3">
+                    {/* Cash Banked */}
+                    {cashBankedTotal > 0 && (
+                      <div className="flex items-center justify-between px-2 py-2 rounded bg-green-50 border border-green-200">
+                        <div>
+                          <p className="text-xs font-bold text-green-800">Cash Banked</p>
+                          <p className="text-[10px] text-green-600">{cashBankedItems2.length} entries deposited</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-green-800">R{cashBankedTotal.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</span>
+                          {bankedAtt ? <Clip has={true} url={bankedAtt.file_url} /> : <Clip has={false} />}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cash Pending */}
+                    {(cashIncomeItems.length > 0 || cashBurialItems.length > 0) && (
+                      <>
+                        <p className="text-xs font-bold">Cash Pending</p>
+                        <table className="w-full text-xs">
+                          <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Entries</th><th className="pb-1 text-right">Amount</th></tr></thead>
+                          <tbody>
+                            {cashIncomeItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Income</td><td className="py-2 text-muted-foreground">{cashIncomeItems.length}</td><td className="py-2 text-right font-medium">R{cashIncomeTotal.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</td></tr>}
+                            {cashBurialItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Burial</td><td className="py-2 text-muted-foreground">{cashBurialItems.length} ({cashBurialItems.map(i=>i.receipt_number||"—").join(", ")})</td><td className="py-2 text-right font-medium">R{cashBurialTotal.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</td></tr>}
+                            <tr className="font-bold border-t bg-muted/30"><td className="py-2">TOTAL PENDING</td><td></td><td className="py-2 text-right">R{cashPendingTotal.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</td></tr>
+                          </tbody>
+                        </table>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Expenses */}
+              {(() => {
+                const expItems = items.filter(i => i.item_type === "Expense");
                 return (
                   <div className="border-t pt-3">
-                    <p className="text-xs font-bold mb-2">Cash Pending</p>
-                    <table className="w-full text-xs">
-                      <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Entries</th><th className="pb-1 text-right">Amount</th></tr></thead>
-                      <tbody>
-                        {cashIncomeItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Income</td><td className="py-2 text-muted-foreground">{cashIncomeItems.length}</td><td className="py-2 text-right font-medium">R{cashIncomeTotal.toFixed(2)}</td></tr>}
-                        {cashBurialItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Burial</td><td className="py-2 text-muted-foreground">{cashBurialItems.length} ({cashBurialItems.map(i=>i.receipt_number||"—").join(", ")})</td><td className="py-2 text-right font-medium">R{cashBurialTotal.toFixed(2)}</td></tr>}
-                        <tr className="font-bold border-t bg-muted/30"><td className="py-2">TOTAL CASH</td><td></td><td className="py-2 text-right">R{cashTotal.toFixed(2)}</td></tr>
-                      </tbody>
-                    </table>
+                    <p className="text-xs font-bold mb-2">Expenses</p>
+                    {expItems.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No expenses this period.</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1">Description</th><th className="pb-1 text-right pr-2">Amount</th><th className="pb-1">Proof</th></tr></thead>
+                        <tbody>
+                          {expItems.map(item => { const att = getAtt(item.id); return (
+                            <tr key={item.id} className="border-b last:border-0">
+                              <td className="py-1.5 pr-2">{item.manual_reference ?? "—"}</td>
+                              <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</td>
+                              <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
+                            </tr>); })}
+                          <tr className="font-bold border-t"><td className="py-2">TOTAL EXPENSES</td><td className="py-2 text-right">R{expensesT.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</td><td></td></tr>
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 );
               })()}
@@ -253,7 +301,7 @@ export default function CaptureViewPage() {
                             return (
                               <div key={pt} className="flex items-center justify-between text-[11px] px-2 py-1 rounded bg-muted/20">
                                 <span className="text-muted-foreground">{pt === "DirectDebit" ? "Direct Debit" : pt === "CashBanked" ? "Cash Banked" : pt === "CashPending" ? "Cash Pending" : pt}</span>
-                                <span className="font-medium">{ptItems.length} × R{ptTotal.toFixed(2)}</span>
+                                <span className="font-medium">{ptItems.length} — R{ptTotal.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</span>
                               </div>
                             );
                           })}
