@@ -103,7 +103,7 @@ export default function AuditReviewPage() {
     const { error: e } = await supabase.from("cashbook_period").update({ status: "AuditApproved", audit_comment: comment || "Approved" }).eq("id", period.id);
     if (e) { setError(e.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_APPROVE", entityType: "cashbook_period", entityId: period.id, comment: comment || "Approved" });
-    setProcessing(false); router.push("/audit");
+    setProcessing(false); handleBack();
   }
 
   async function handleReject() {
@@ -116,7 +116,15 @@ export default function AuditReviewPage() {
     const { error: e } = await supabase.from("cashbook_period").update({ status: "Rejected", audit_comment: comment }).eq("id", period.id);
     if (e) { setError(e.message); setProcessing(false); return; }
     await logAuditAction({ userId: access.user_id, actionType: "AUDIT_REJECT", entityType: "cashbook_period", entityId: period.id, comment });
-    setProcessing(false); router.push("/audit");
+    setProcessing(false); handleBack();
+  }
+
+  // Role-based back navigation
+  function handleBack() {
+    const r = access?.role;
+    if (r === "Elder") router.push("/elder");
+    else if (r === "Chairperson") router.push("/chairperson");
+    else router.push("/audit");
   }
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading audit...</div>;
@@ -136,7 +144,7 @@ export default function AuditReviewPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
-      <Button variant="outline" size="sm" onClick={() => router.push("/audit")}>← Back to Audit Queue</Button>
+      <Button variant="outline" size="sm" onClick={handleBack}>← Back</Button>
 
       {/* Audit Banner */}
       <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between">

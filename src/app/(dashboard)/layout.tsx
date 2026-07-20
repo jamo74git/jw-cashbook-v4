@@ -60,7 +60,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {access?.role?.slice(0, 2).toUpperCase() ?? "??"}
             </button>
             {showMenu && (
-              <div className="absolute right-0 top-9 z-50 min-w-36 rounded-md border bg-background p-1 shadow-lg">
+              <div className="absolute right-0 top-9 z-50 min-w-40 rounded-md border bg-background p-1 shadow-lg">
+                <div className="px-3 py-2 border-b text-xs">
+                  <p className="font-medium">{access?.role}</p>
+                  <p className="text-muted-foreground text-[10px]">{congCode} {congName}</p>
+                </div>
+                {access && ["Elder", "Chairperson", "HO"].includes(access.role) && (
+                  <button onClick={() => { setShowMenu(false); router.push("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">Settings</button>
+                )}
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">Sign Out</button>
               </div>
             )}
