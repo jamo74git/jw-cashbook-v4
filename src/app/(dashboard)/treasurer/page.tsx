@@ -137,10 +137,10 @@ export default function TreasurerDashboardPage() {
           <CardHeader className="pb-2"><CardTitle className="text-sm">Recent Services</CardTitle></CardHeader>
           <CardContent className="space-y-1">
             {periods.slice(0, 8).map(p => (
-              <div key={p.id} className="flex items-center justify-between py-1.5 border-b last:border-0 text-xs">
+              <button key={p.id} onClick={() => router.push(`/capture/${p.id}`)} className="w-full flex items-center justify-between py-1.5 border-b last:border-0 text-xs hover:bg-muted/50 rounded px-1 transition-colors text-left">
                 <span>{months[(p.month ?? 1) - 1]} {p.year} — Wk {p.week} ({p.service})</span>
                 {statusBadge(p.status)}
-              </div>
+              </button>
             ))}
           </CardContent>
         </Card>

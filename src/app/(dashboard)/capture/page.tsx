@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess, hasPermission, isOverrideAction, logSelfReviewException } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,6 +96,7 @@ async function compressImage(file: File, maxWidth = 1920, quality = 0.8): Promis
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function CapturePage() {
   const supabase = createClient();
+  const router = useRouter();
 
   // ── Core State ────────────────────────────────────────────────────────────
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
@@ -403,6 +405,12 @@ export default function CapturePage() {
       {/* Header: Week + Service */}
       <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
         <div className="flex items-center gap-2 text-xs">
+          <Button variant="outline" size="sm" className="h-7 text-[10px]" onClick={() => {
+            const role = access?.role;
+            if (role === "Elder") router.push("/elder");
+            else if (role === "Chairperson") router.push("/chairperson");
+            else router.push("/treasurer");
+          }}>← Back</Button>
           <select className="h-7 rounded border border-input bg-background px-2 text-xs font-medium max-w-[220px]" value={selectedWeekKey} onChange={e => { setSelectedWeekKey(e.target.value); loadPeriod(selectedService, e.target.value); }}>
             {availableWeeks.map(w => <option key={w.weekKey} value={w.weekKey}>{w.label}</option>)}
           </select>

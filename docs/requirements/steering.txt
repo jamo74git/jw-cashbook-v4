@@ -5,7 +5,7 @@ Enterprise cashbook. Capture by Officer Code. Audit and Submit done on Mobile.
 Responsive for HO/Apostle/Overseer desktop review.
 
 ## Hierarchy Model - Corrected
-Conference > Apostolate > District > Apostleship > Overseership > Eldership > Congregation
+Conference > Apostolate > District > Apostleship > Overseership > Congregation
 Note: Apostle oversees Overseerships. 3+ Apostleships = District
 
 ## Roles & Permissions

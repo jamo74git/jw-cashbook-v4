@@ -348,7 +348,7 @@ export default function ElderDashboard() {
                     {reviewPeriods.map(p => (
                       <button
                         key={p.id}
-                        onClick={() => router.push(`/audit/${p.id}`)}
+                        onClick={() => router.push(`/capture/${p.id}`)}
                         className="w-full flex items-center justify-between px-3 py-2 rounded border text-xs hover:bg-muted transition-colors text-left"
                       >
                         <span className="font-medium">Week {p.week} — {p.service}</span>
