@@ -132,23 +132,63 @@ export default function CaptureViewPage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-xs">{activeTab}</CardTitle></CardHeader>
         <CardContent>
-          {tabItems(activeTab).length === 0 ? (
+          {tabItems(activeTab).length === 0 && activeTab !== "Banking" ? (
             <p className="text-xs text-muted-foreground">No {activeTab.toLowerCase()} entries.</p>
           ) : activeTab === "Banking" ? (
-            <table className="w-full text-xs">
-              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Date</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Officer</th><th className="pb-1">Proof</th></tr></thead>
-              <tbody>
-                {tabItems("Banking").sort((a,b) => { const o = (t: string) => t === "DirectDebit" ? 0 : t === "EFT" ? 1 : 2; return o(a.item_type) - o(b.item_type); }).map(item => { const att = getAtt(item.id); return (
-                  <tr key={item.id} className="border-b last:border-0">
-                    <td className="py-1.5 pr-2">{att?.transaction_date ?? item.transaction_date ?? "—"}</td>
-                    <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
-                    <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                    <td className="py-1.5 pr-2">{getOfficerCode(item.officer_id)}</td>
-                    <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
-                  </tr>); })}
-                <tr className="font-bold border-t"><td colSpan={2} className="py-2">TOTAL</td><td className="py-2 text-right">R{tabItems("Banking").reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
-              </tbody>
-            </table>
+            <div className="space-y-4">
+              {/* Electronic Banking */}
+              {(() => {
+                const ddItems = items.filter(i => i.item_type === "DirectDebit" && ["Members","Officers"].includes(i.section));
+                const eftItems = items.filter(i => i.item_type === "EFT" && ["Members","Officers"].includes(i.section));
+                const cbItems = items.filter(i => i.item_type === "CashBanked");
+                const renderGroup = (groupItems: LineItem[], label: string) => groupItems.length === 0 ? null : (<>
+                  {groupItems.map(item => { const att = getAtt(item.id); return (
+                    <tr key={item.id} className="border-b last:border-0">
+                      <td className="py-1.5 pr-2">{att?.transaction_date ?? item.transaction_date ?? "—"}</td>
+                      <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
+                      <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
+                      <td className="py-1.5 pr-2">{getOfficerCode(item.officer_id)}</td>
+                      <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
+                    </tr>); })}
+                  <tr className="bg-muted/50 font-bold border-t"><td colSpan={2} className="py-1.5 pl-2 text-[11px]">Subtotal {label}</td><td className="py-1.5 text-right text-[11px]">R{groupItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td colSpan={2}></td></tr>
+                </>);
+                const bankingTotal = [...ddItems, ...eftItems, ...cbItems].reduce((s,i)=>s+Number(i.amount),0);
+                return (
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Date on Proof</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1 pr-2">Officer</th><th className="pb-1">Proof</th></tr></thead>
+                    <tbody>
+                      {renderGroup(ddItems, "Direct Debit")}
+                      {renderGroup(eftItems, "EFT")}
+                      {renderGroup(cbItems, "Cash Banked")}
+                      <tr className="font-bold border-t"><td colSpan={2} className="py-2">BANKING TOTAL</td><td className="py-2 text-right">R{bankingTotal.toFixed(2)}</td><td colSpan={2}></td></tr>
+                    </tbody>
+                  </table>
+                );
+              })()}
+
+              {/* Cash Pending */}
+              {(() => {
+                const cashIncomeItems = items.filter(i => ["Cash","CashPending"].includes(i.item_type) && ["Members","Officers"].includes(i.section));
+                const cashBurialItems = items.filter(i => i.item_type === "Burial");
+                const cashIncomeTotal = cashIncomeItems.reduce((s, i) => s + Number(i.amount), 0);
+                const cashBurialTotal = cashBurialItems.reduce((s, i) => s + Number(i.amount), 0);
+                const cashTotal = cashIncomeTotal + cashBurialTotal;
+                if (cashIncomeItems.length === 0 && cashBurialItems.length === 0) return null;
+                return (
+                  <div className="border-t pt-3">
+                    <p className="text-xs font-bold mb-2">Cash Pending</p>
+                    <table className="w-full text-xs">
+                      <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Source</th><th className="pb-1 pr-2">Entries</th><th className="pb-1 text-right">Amount</th></tr></thead>
+                      <tbody>
+                        {cashIncomeItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Income</td><td className="py-2 text-muted-foreground">{cashIncomeItems.length}</td><td className="py-2 text-right font-medium">R{cashIncomeTotal.toFixed(2)}</td></tr>}
+                        {cashBurialItems.length > 0 && <tr className="border-b"><td className="py-2 font-medium">Cash Burial</td><td className="py-2 text-muted-foreground">{cashBurialItems.length} ({cashBurialItems.map(i=>i.receipt_number||"—").join(", ")})</td><td className="py-2 text-right font-medium">R{cashBurialTotal.toFixed(2)}</td></tr>}
+                        <tr className="font-bold border-t bg-muted/30"><td className="py-2">TOTAL CASH</td><td></td><td className="py-2 text-right">R{cashTotal.toFixed(2)}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
           ) : activeTab === "Burial" ? (
             <table className="w-full text-xs">
               <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Receipt</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1">Proof</th></tr></thead>

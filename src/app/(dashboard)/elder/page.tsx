@@ -15,7 +15,7 @@ import type { UserHierarchyAccess } from "@/lib/types";
 interface Congregation { id: string; name: string; code: string; }
 
 // Tab 1: Governance
-interface GovRow { congName: string; code: string; completed: number; awaitingAudit: number; auditApproved: number; submittedToOverseer: number; lastEdit: string | null; }
+interface GovRow { congName: string; code: string; inProgress: number; awaitingAudit: number; auditApproved: number; submittedToOverseer: number; lastEdit: string | null; }
 
 // Tab 2: Monthly Submission
 interface WeekData { week: number; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; }
@@ -98,13 +98,6 @@ export default function ElderDashboard() {
 
   useEffect(() => { loadAll(); }, [selectedMonth]);
 
-  // Auto-refresh every 30 seconds to pick up audit status changes
-  useEffect(() => {
-    const interval = setInterval(() => { loadAll(); }, 30000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMonth]);
-
   async function loadAll() {
     setLoading(true);
     const ua = await getUserAccess();
@@ -160,7 +153,7 @@ export default function ElderDashboard() {
       const lastPeriod = cPeriods.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
       return {
         congName: c.name, code: c.code,
-        completed: cPeriods.filter(p => p.status === "Draft").length,
+        inProgress: cPeriods.filter(p => p.status === "Draft" || p.status === "Rejected").length,
         awaitingAudit: cPeriods.filter(p => p.status === "Submitted").length,
         auditApproved: cPeriods.filter(p => p.status === "AuditApproved").length,
         submittedToOverseer: cPeriods.filter(p => ["SubmittedToHO","HOReviewed"].includes(p.status)).length,
@@ -310,17 +303,19 @@ export default function ElderDashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead><tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
-                <th className="px-3 py-2 text-left">Congregation</th><th className="px-2 py-2">Code</th>
-                <th className="px-2 py-2" style={{ color: C.completed }}>Completed</th>
-                <th className="px-2 py-2" style={{ color: C.awaiting }}>Awaiting Audit</th>
-                <th className="px-2 py-2" style={{ color: C.approved }}>Audit Approved</th>
-                <th className="px-2 py-2" style={{ color: C.submitted }}>Submitted to Overseer</th>
-                <th className="px-2 py-2">Last Edit</th><th className="px-2 py-2">Action</th>
+                <th className="px-3 py-2 text-left border-r border-white/20">Congregation</th>
+                <th className="px-2 py-2 border-r border-white/20">Code</th>
+                <th className="px-2 py-2 border-r border-white/20">In Progress</th>
+                <th className="px-2 py-2 border-r border-white/20">Awaiting Audit</th>
+                <th className="px-2 py-2 border-r border-white/20">Audit Approved</th>
+                <th className="px-2 py-2 border-r border-white/20">Submitted to Overseer</th>
+                <th className="px-2 py-2 border-r border-white/20">Last Edit</th>
+                <th className="px-2 py-2">Action</th>
               </tr></thead>
               <tbody>{govRows.map(r => (
                 <tr key={r.code} className="border-b">
                   <td className="px-3 py-2 font-medium">{r.congName}</td><td className="px-2 py-2 text-center">{r.code}</td>
-                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.completed }}>{r.completed || "-"}</td>
+                  <td className="px-2 py-2 text-center font-bold" style={{ color: C.completed }}>{r.inProgress || "-"}</td>
                   <td className="px-2 py-2 text-center font-bold" style={{ color: C.awaiting }}>{r.awaitingAudit || "-"}</td>
                   <td className="px-2 py-2 text-center font-bold" style={{ color: C.approved }}>{r.auditApproved || "-"}</td>
                   <td className="px-2 py-2 text-center font-bold" style={{ color: C.submitted }}>{r.submittedToOverseer || "-"}</td>
