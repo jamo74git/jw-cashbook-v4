@@ -15,11 +15,8 @@ import type { UserHierarchyAccess } from "@/lib/types";
 interface Congregation { id: string; name: string; code: string; }
 
 // Tab 1: Governance
-interface GovRow { congName: string; code: string; inProgress: number; awaitingAudit: number; auditApproved: number; submittedToOverseer: number; lastEdit: string | null; }
+interface GovRow { congName: string; code: string; congId: string; inProgress: number; awaitingAudit: number; auditApproved: number; submittedToOverseer: number; lastEdit: string | null; totalWeeks: number; capturedWeeks: number; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; }
 
-// Tab 2: Monthly Submission
-interface WeekData { week: number; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; }
-interface SubmissionRow { congId: string; congName: string; membersCash: number; membersDeposit: number; officersCash: number; officersDeposit: number; burial: number; expenses: number; weeks: WeekData[]; totalWeeks: number; allAuditApproved: boolean; }
 
 // Tab 3: Priest Review
 interface PriestRow { officerCode: string; membersCash: number; membersDeposit: number; priestTotal: number; officersCash: number; officersDeposit: number; officerTotal: number; }
@@ -27,12 +24,11 @@ interface PriestCongRow { congId: string; congName: string; membersCash: number;
 interface CashRiskItem { priestCode: string; amount: number; pct: number; cashPct: number; }
 
 // Tab 4: Audit Log
-interface AuditRow { date: string; congregation: string; field: string; oldVal: string; newVal: string; by: string; }
+interface AuditRow { date: string; congregation: string; action: string; week: string; comment: string; by: string; }
 
-type TabKey = "governance" | "submission" | "priest" | "risk";
+type TabKey = "governance" | "priest" | "risk";
 const TABS: { key: TabKey; label: string }[] = [
   { key: "governance", label: "Governance" },
-  { key: "submission", label: "Monthly Submission" },
   { key: "priest", label: "Tithing Review" },
   { key: "risk", label: "Risk & Audit" },
 ];
@@ -73,7 +69,6 @@ export default function ElderDashboard() {
 
   // Tab data
   const [govRows, setGovRows] = useState<GovRow[]>([]);
-  const [subRows, setSubRows] = useState<SubmissionRow[]>([]);
   const [priestRows, setPriestRows] = useState<PriestCongRow[]>([]);
   const [cashRisks, setCashRisks] = useState<CashRiskItem[]>([]);
   const [totalCash, setTotalCash] = useState(0);
@@ -148,59 +143,36 @@ export default function ElderDashboard() {
     const allOfficers = officers ?? [];
 
     // ─── TAB 1: Governance ──────────────────────────────────────────────────
+    // Calculate total expected weeks
+    const sundays: number[] = [];
+    for (let d = 1; d <= new Date(year, month, 0).getDate(); d++) { if (new Date(year, month-1, d).getDay() === 0) sundays.push(d); }
+    const totalWeeks = Math.max(sundays.length - 1, 1); // OAC weeks (2nd Sunday = W1)
+
     const gov: GovRow[] = congList.map(c => {
       const cPeriods = allPeriods.filter(p => p.congregation_id === c.id);
-      const lastPeriod = cPeriods.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      const cItems = items.filter(i => cPeriods.map(p=>p.id).includes(i.period_id));
+      const lastPeriod = [...cPeriods].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      const uniqueWeeks = new Set(cPeriods.map(p => p.week));
       return {
-        congName: c.name, code: c.code,
+        congName: c.name, code: c.code, congId: c.id,
         inProgress: cPeriods.filter(p => p.status === "Draft" || p.status === "Rejected").length,
         awaitingAudit: cPeriods.filter(p => p.status === "Submitted").length,
         auditApproved: cPeriods.filter(p => p.status === "AuditApproved").length,
         submittedToOverseer: cPeriods.filter(p => ["SubmittedToHO","HOReviewed"].includes(p.status)).length,
         lastEdit: lastPeriod?.created_at ? new Date(lastPeriod.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null,
+        totalWeeks,
+        capturedWeeks: uniqueWeeks.size,
+        membersCash: cItems.filter(i=>!i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        membersDeposit: cItems.filter(i=>!i.is_officer && ["EFT","DirectDebit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        officersCash: cItems.filter(i=>i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        officersDeposit: cItems.filter(i=>i.is_officer && ["EFT","DirectDebit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
+        burial: cItems.filter(i=>i.item_type==="Burial").reduce((s,i)=>s+Number(i.amount),0),
+        expenses: cItems.filter(i=>i.item_type==="Expense").reduce((s,i)=>s+Number(i.amount),0),
       };
     });
     setGovRows(gov);
 
-    // ─── TAB 2: Monthly Submission ──────────────────────────────────────────
-    // Calculate how many Sundays (weeks) this month has using OAC logic
-    const sundays: number[] = [];
-    for (let d = 1; d <= new Date(year, month, 0).getDate(); d++) { if (new Date(year, month-1, d).getDay() === 0) sundays.push(d); }
-    const totalWeeks = Math.min(sundays.length, 5); // OAC: 2nd Sunday = W1, so weeks = sundays.length - 1, plus last week from next month
-
-    const sub: SubmissionRow[] = congList.map(c => {
-      const cPeriods = allPeriods.filter(p => p.congregation_id === c.id);
-      const cItems = items.filter(i => cPeriods.map(p=>p.id).includes(i.period_id));
-
-      const sumByWeekAndType = (week: number, isOff: boolean, types: string[]) =>
-        cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.is_officer === isOff && types.includes(i.item_type); }).reduce((s,i)=>s+Number(i.amount),0);
-      const sumBurial = (week: number) => cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.item_type === "Burial"; }).reduce((s,i)=>s+Number(i.amount),0);
-      const sumExpense = (week: number) => cItems.filter(i => { const p = cPeriods.find(pp => pp.id === i.period_id); return p?.week === week && i.item_type === "Expense"; }).reduce((s,i)=>s+Number(i.amount),0);
-
-      const weeks: WeekData[] = Array.from({ length: 5 }, (_, i) => ({
-        week: i + 1,
-        membersCash: sumByWeekAndType(i+1, false, ["Cash","CashBanked","CashPending"]),
-        membersDeposit: sumByWeekAndType(i+1, false, ["EFT","DirectDeposit"]),
-        officersCash: sumByWeekAndType(i+1, true, ["Cash","CashBanked","CashPending"]),
-        officersDeposit: sumByWeekAndType(i+1, true, ["EFT","DirectDeposit"]),
-        burial: sumBurial(i+1),
-        expenses: sumExpense(i+1),
-      }));
-
-      const allApproved = cPeriods.length > 0 && cPeriods.every(p => p.status === "AuditApproved");
-
-      return {
-        congId: c.id, congName: c.name,
-        membersCash: cItems.filter(i=>!i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
-        membersDeposit: cItems.filter(i=>!i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
-        officersCash: cItems.filter(i=>i.is_officer && ["Cash","CashBanked","CashPending"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
-        officersDeposit: cItems.filter(i=>i.is_officer && ["EFT","DirectDeposit"].includes(i.item_type)).reduce((s,i)=>s+Number(i.amount),0),
-        burial: cItems.filter(i=>i.item_type==="Burial").reduce((s,i)=>s+Number(i.amount),0),
-        expenses: cItems.filter(i=>i.item_type==="Expense").reduce((s,i)=>s+Number(i.amount),0),
-        weeks, totalWeeks, allAuditApproved: allApproved,
-      };
-    });
-    setSubRows(sub);
+    // (submission data now merged into governance above)
 
     // ─── TAB 3: Priest Review ───────────────────────────────────────────────
     const priestData: PriestCongRow[] = congList.map(c => {
@@ -235,28 +207,30 @@ export default function ElderDashboard() {
     setCashRisks(riskSorted.map(p => ({ priestCode: p.officerCode, amount: p.membersCash + p.officersCash, pct: totalAll > 0 ? Math.round(((p.membersCash+p.officersCash)/totalAll)*100) : 0, cashPct: totalC > 0 ? Math.round(((p.membersCash+p.officersCash)/totalC)*100) : 0 })));
 
     // ─── TAB 4: Audit Log ───────────────────────────────────────────────────
-    // Show period status changes with audit_comment as the "by" indicator
-    const auditPeriods = allPeriods.filter(p => p.status !== "Draft");
-    // Try to get audit_comment from periods (it stores who approved/rejected)
-    const periodIdsForAudit = auditPeriods.map(p => p.id);
-    const auditComments: Record<string, string> = {};
-    if (periodIdsForAudit.length > 0) {
-      const { data: detailedPeriods } = await supabase.from("cashbook_period")
-        .select("id, audit_comment")
-        .in("id", periodIdsForAudit);
-      if (detailedPeriods) {
-        detailedPeriods.forEach(dp => { if (dp.audit_comment) auditComments[dp.id] = dp.audit_comment; });
-      }
+    // Query audit_log for actions on these periods
+    const { data: auditLogs } = periodIds.length > 0
+      ? await supabase.from("audit_log").select("user_id, action_type, entity_id, comment, metadata").in("entity_id", periodIds).order("created_at", { ascending: false }).limit(20)
+      : { data: [] };
+
+    // Get user emails for the audit log entries
+    const auditUserIds = [...new Set((auditLogs ?? []).map(a => a.user_id))];
+    const userEmails: Record<string, string> = {};
+    if (auditUserIds.length > 0) {
+      const { data: accessRows } = await supabase.from("user_hierarchy_access").select("user_id, role").in("user_id", auditUserIds);
+      (accessRows ?? []).forEach(a => { userEmails[a.user_id] = a.role; });
     }
 
-    setAuditRows(auditPeriods.map(p => ({
-      date: new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
-      congregation: congList.find(c=>c.id===p.congregation_id)?.name ?? "",
-      field: `Week ${p.week} ${p.service}`,
-      oldVal: "Draft",
-      newVal: p.status === "AuditApproved" ? "Approved" : p.status === "Submitted" ? "Submitted for Audit" : p.status,
-      by: auditComments[p.id] ?? "—"
-    })));
+    setAuditRows((auditLogs ?? []).map(a => {
+      const period2 = allPeriods.find(p => p.id === a.entity_id);
+      return {
+        date: "—",
+        congregation: period2 ? congList.find(c => c.id === period2.congregation_id)?.name ?? "" : "",
+        action: a.action_type === "AUDIT_APPROVE" ? "Approved" : a.action_type === "AUDIT_REJECT" ? "Rejected" : a.action_type,
+        week: period2 ? `Wk ${period2.week} ${period2.service}` : "—",
+        comment: a.comment ?? "",
+        by: userEmails[a.user_id] ?? "—",
+      };
+    }));
 
     setLoading(false);
   }
@@ -383,73 +357,57 @@ export default function ElderDashboard() {
               </CardContent>
             </Card>
           )}
+
+          {/* Submission Summary — merged into governance */}
+          <Card className="mt-4">
+            <CardContent className="py-4">
+              <h3 className="text-sm font-bold mb-3">Submission Summary</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
+                      <th className="px-2 py-2 text-left border-r border-white/20">Congregation</th>
+                      <th className="px-2 py-2 text-center border-r border-white/20">Weeks</th>
+                      <th className="px-2 py-2 text-right border-r border-white/20">Members</th>
+                      <th className="px-2 py-2 text-right border-r border-white/20">Officers</th>
+                      <th className="px-2 py-2 text-right border-r border-white/20">Burial</th>
+                      <th className="px-2 py-2 text-right border-r border-white/20">Expenses</th>
+                      <th className="px-2 py-2 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {govRows.map(r => {
+                      const total = r.membersCash + r.membersDeposit + r.officersCash + r.officersDeposit + r.burial - r.expenses;
+                      return (
+                        <tr key={r.congId} className="border-b">
+                          <td className="px-2 py-2 font-medium">{r.congName}</td>
+                          <td className="px-2 py-2 text-center">
+                            <Badge variant={r.capturedWeeks >= r.totalWeeks ? "default" : r.capturedWeeks > 0 ? "secondary" : "outline"} className="text-[9px]">
+                              {r.capturedWeeks}/{r.totalWeeks}
+                            </Badge>
+                          </td>
+                          <td className="px-2 py-2 text-right">R{(r.membersCash + r.membersDeposit).toFixed(2)}</td>
+                          <td className="px-2 py-2 text-right">R{(r.officersCash + r.officersDeposit).toFixed(2)}</td>
+                          <td className="px-2 py-2 text-right">R{r.burial.toFixed(2)}</td>
+                          <td className="px-2 py-2 text-right">R{r.expenses.toFixed(2)}</td>
+                          <td className="px-2 py-2 text-right font-bold">R{total.toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* Submit All button */}
+              <div className="text-center pt-3">
+                <Button onClick={handleSubmitAll} disabled={submitting || !govRows.every(r => r.auditApproved > 0 && r.inProgress === 0 && r.awaitingAudit === 0)} className="px-6">
+                  {submitting ? "..." : "Submit All Approved to Overseer"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </>)}
 
-        {/* ─── TAB 2: MONTHLY SUBMISSION ─── */}
-        {activeTab === "submission" && (
-          <div className="space-y-2">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
-                    <th className="px-2 py-1" rowSpan={2}></th><th className="px-2 py-1" rowSpan={2}>Congregation</th>
-                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={2}>Members</th>
-                    <th className="px-2 py-1 text-center border-x border-white/30" colSpan={2}>Officers</th>
-                    <th className="px-2 py-1 text-center">Burial</th><th className="px-2 py-1 text-center">Expenses</th><th className="px-2 py-1"></th>
-                  </tr>
-                  <tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
-                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
-                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Deposit/EFT</th>
-                    <th className="px-2 py-1 text-right text-[10px]">Cash</th><th className="px-2 py-1 text-right text-[10px]">Cash</th><th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {subRows.map(r => (<React.Fragment key={r.congId}>
-                    {/* Congregation total row */}
-                    <tr key={r.congId} className="border-b font-medium bg-muted/30">
-                      <td className="px-2 py-2 cursor-pointer text-center" onClick={() => toggleExpand(`sub-${r.congId}`)}>{expanded.has(`sub-${r.congId}`) ? "−" : "+"}</td>
-                      <td className="px-2 py-2 font-bold">{r.congName}</td>
-                      <td className="px-2 py-2 text-right">R {r.membersCash.toFixed(2)}</td>
-                      <td className="px-2 py-2 text-right">R {r.membersDeposit.toFixed(2)}</td>
-                      <td className="px-2 py-2 text-right">R {r.officersCash.toFixed(2)}</td>
-                      <td className="px-2 py-2 text-right">R {r.officersDeposit.toFixed(2)}</td>
-                      <td className="px-2 py-2 text-right">R {r.burial.toFixed(2)}</td>
-                      <td className="px-2 py-2 text-right">R {r.expenses.toFixed(2)}</td>
-                      <td className="px-2 py-2">
-                        <Button size="sm" variant="outline" className="h-6 text-[10px]" disabled={!r.allAuditApproved} title={r.allAuditApproved ? "" : "Complete audits first"}>
-                          Submit to Overseer
-                        </Button>
-                      </td>
-                    </tr>
-                    {/* Expanded week rows */}
-                    {expanded.has(`sub-${r.congId}`) && r.weeks.map(w => (
-                      <tr key={`${r.congId}-w${w.week}`} className="border-b text-muted-foreground">
-                        <td></td>
-                        <td className="px-2 py-1 pl-8">Week {w.week}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.membersCash.toFixed(2)}` : "x"}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R${w.membersDeposit.toFixed(2)}` : "x"}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.officersCash.toFixed(2)}` : "x"}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.officersDeposit.toFixed(2)}` : "x"}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R${w.burial.toFixed(2)}` : "x"}</td>
-                        <td className="px-2 py-1 text-right">{w.week <= r.totalWeeks ? `R ${w.expenses.toFixed(2)}` : "x"}</td>
-                        <td></td>
-                      </tr>
-                    ))}
-                  </React.Fragment>))}
-                </tbody>
-              </table>
-            </div>
-            {/* Submit All button */}
-            <div className="text-center space-y-1 pt-2">
-              <Button onClick={handleSubmitAll} disabled={submitting || !subRows.every(r => r.allAuditApproved)} className="px-6">
-                {submitting ? "..." : "Submit All Approved to Overseer"}
-              </Button>
-              <p className="text-[10px] text-muted-foreground">All congregations must be past Draft status before submitting to Overseer.</p>
-            </div>
-          </div>
-        )}
-
-        {/* ─── TAB 3: PRIEST REVIEW ─── */}
+        {/* ─── TAB 3: TITHING REVIEW ─── */}
         {activeTab === "priest" && (
           <div className="space-y-4">
             <div className="overflow-x-auto">
@@ -552,17 +510,25 @@ export default function ElderDashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead><tr style={{ backgroundColor: C.headerBg, color: C.headerText }}>
-                <th className="px-3 py-2 text-left">Date</th><th className="px-2 py-2 text-left">Congregation</th>
-                <th className="px-2 py-2 text-left">Field</th><th className="px-2 py-2 text-left">Old</th>
-                <th className="px-2 py-2 text-left">New</th><th className="px-2 py-2 text-left">By</th>
+                <th className="px-3 py-2 text-left border-r border-white/20">Congregation</th>
+                <th className="px-2 py-2 text-left border-r border-white/20">Week</th>
+                <th className="px-2 py-2 text-left border-r border-white/20">Action</th>
+                <th className="px-2 py-2 text-left border-r border-white/20">Comment</th>
+                <th className="px-2 py-2 text-left">By</th>
               </tr></thead>
               <tbody>
-                {auditRows.length === 0 ? <tr><td colSpan={6} className="px-3 py-4 text-center text-muted-foreground">No audit events for this period.</td></tr> : (
+                {auditRows.length === 0 ? <tr><td colSpan={5} className="px-3 py-4 text-center text-muted-foreground">No audit events for this period.</td></tr> : (
                   auditRows.map((r, i) => (
                     <tr key={i} className="border-b">
-                      <td className="px-3 py-2">{r.date}</td><td className="px-2 py-2">{r.congregation}</td>
-                      <td className="px-2 py-2">{r.field}</td><td className="px-2 py-2">{r.oldVal}</td>
-                      <td className="px-2 py-2">{r.newVal}</td><td className="px-2 py-2">{r.by}</td>
+                      <td className="px-3 py-2">{r.congregation}</td>
+                      <td className="px-2 py-2">{r.week}</td>
+                      <td className="px-2 py-2">
+                        <Badge variant="outline" className={`text-[9px] ${r.action === "Approved" ? "bg-green-50 text-green-700 border-green-300" : r.action === "Rejected" ? "bg-red-50 text-red-700 border-red-300" : ""}`}>
+                          {r.action}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-2 text-muted-foreground">{r.comment || "—"}</td>
+                      <td className="px-2 py-2 font-medium">{r.by}</td>
                     </tr>
                   ))
                 )}
