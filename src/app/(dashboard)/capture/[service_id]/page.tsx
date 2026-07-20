@@ -36,6 +36,7 @@ export default function CaptureViewPage() {
   const [officers, setOfficers] = useState<Officer[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>("Members");
   const [loading, setLoading] = useState(true);
+  const [expandedOfficers, setExpandedOfficers] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -216,20 +217,57 @@ export default function CaptureViewPage() {
               </tbody>
             </table>
           ) : (
-            /* Members / Officers */
-            <table className="w-full text-xs">
-              <thead><tr className="border-b text-muted-foreground text-left"><th className="pb-1 pr-2">Officer</th><th className="pb-1 pr-2">Type</th><th className="pb-1 pr-2 text-right">Amount</th><th className="pb-1">Proof</th></tr></thead>
-              <tbody>
-                {tabItems(activeTab).map(item => { const att = getAtt(item.id); return (
-                  <tr key={item.id} className="border-b last:border-0">
-                    <td className="py-1.5 pr-2">{getOfficerCode(item.officer_id)}</td>
-                    <td className="py-1.5 pr-2">{item.item_type === "DirectDebit" ? "Direct Debit" : item.item_type}</td>
-                    <td className="py-1.5 pr-2 text-right font-medium">R{Number(item.amount).toFixed(2)}</td>
-                    <td className="py-1.5"><Clip has={!!att} url={att?.file_url} /></td>
-                  </tr>); })}
-                <tr className="font-bold border-t"><td colSpan={2} className="py-2">TOTAL</td><td className="py-2 text-right">R{tabItems(activeTab).reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</td><td></td></tr>
-              </tbody>
-            </table>
+            /* Members / Officers - grouped by priestship */
+            (() => {
+              const tItems = tabItems(activeTab);
+              // Group by officer
+              const officerIds = [...new Set(tItems.map(i => i.officer_id ?? "unknown"))];
+              const grouped = officerIds.map(offId => {
+                const offItems = tItems.filter(i => i.officer_id === offId);
+                return { offId, code: getOfficerCode(offId), total: offItems.reduce((s,i) => s + Number(i.amount), 0), items: offItems };
+              }).sort((a, b) => a.code.localeCompare(b.code));
+
+              const toggleOfficer = (id: string) => {
+                setExpandedOfficers(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+              };
+
+              return (
+                <div className="space-y-0">
+                  {grouped.map(g => (
+                    <div key={g.offId} className="border-b last:border-0">
+                      <button onClick={() => toggleOfficer(g.offId)} className="w-full flex items-center justify-between py-2 px-1 text-xs hover:bg-muted/30 transition-colors text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">{expandedOfficers.has(g.offId) ? "▼" : "▶"}</span>
+                          <span className="font-medium">{g.code}</span>
+                          <span className="text-muted-foreground">({g.items.length} entries)</span>
+                        </div>
+                        <span className="font-bold">R{g.total.toFixed(2)}</span>
+                      </button>
+                      {expandedOfficers.has(g.offId) && (
+                        <div className="pl-6 pb-2 space-y-0.5">
+                          {/* Payment type breakdown */}
+                          {["DirectDebit", "EFT", "Cash", "CashBanked", "CashPending"].map(pt => {
+                            const ptItems = g.items.filter(i => i.item_type === pt);
+                            if (ptItems.length === 0) return null;
+                            const ptTotal = ptItems.reduce((s,i) => s + Number(i.amount), 0);
+                            return (
+                              <div key={pt} className="flex items-center justify-between text-[11px] px-2 py-1 rounded bg-muted/20">
+                                <span className="text-muted-foreground">{pt === "DirectDebit" ? "Direct Debit" : pt === "CashBanked" ? "Cash Banked" : pt === "CashPending" ? "Cash Pending" : pt}</span>
+                                <span className="font-medium">{ptItems.length} × R{ptTotal.toFixed(2)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex justify-between py-2 px-1 font-bold text-xs border-t">
+                    <span>TOTAL</span>
+                    <span>R{tItems.reduce((s,i)=>s+Number(i.amount),0).toFixed(2)}</span>
+                  </div>
+                </div>
+              );
+            })()
           )}
         </CardContent>
       </Card>
