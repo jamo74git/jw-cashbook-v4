@@ -48,7 +48,6 @@ export default function CongregationsPage() {
   const [newName, setNewName] = useState("");
   const [newCode, setNewCode] = useState("");
   const [newOverseership, setNewOverseership] = useState("");
-  const [newEldership, setNewEldership] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [newGps, setNewGps] = useState("");
   const [newContact, setNewContact] = useState("");
@@ -81,22 +80,28 @@ export default function CongregationsPage() {
   async function loadData() {
     setLoading(true);
     const [{ data: congs }, { data: nodes }, { data: offs }] = await Promise.all([
-      supabase.from("congregations").select("id, name, code, eldership_id, overseership_id, property_status, water_meter_number, electricity_meter_number, admin_elder_id, physical_address, contact_number, gps_location").order("name"),
+      supabase.from("congregations").select("*").order("name"),
       supabase.from("hierarchy_levels").select("id, name, level_type, parent_id").order("name"),
       supabase.from("officers").select("id, officer_code, first_name, last_name, rank, congregation_id").eq("is_active", true).order("officer_code"),
     ]);
-    setCongregations(congs ?? []);
+    setCongregations((congs ?? []).map(c => ({
+      id: c.id, name: c.name, code: c.code,
+      eldership_id: c.eldership_id ?? null,
+      overseership_id: c.overseership_id ?? null,
+      property_status: c.property_status ?? null,
+      water_meter_number: c.water_meter_number ?? null,
+      electricity_meter_number: c.electricity_meter_number ?? null,
+      admin_elder_id: c.admin_elder_id ?? null,
+      physical_address: c.physical_address ?? null,
+      contact_number: c.contact_number ?? null,
+      gps_location: c.gps_location ?? null,
+    })));
     setHierarchyNodes(nodes ?? []);
     setOfficers(offs ?? []);
     setLoading(false);
   }
 
   const overseerships = useMemo(() => hierarchyNodes.filter(n => n.level_type === "Overseership"), [hierarchyNodes]);
-  const elderships = useMemo(() => {
-    let nodes = hierarchyNodes.filter(n => n.level_type === "Eldership");
-    if (newOverseership) nodes = nodes.filter(n => n.parent_id === newOverseership);
-    return nodes;
-  }, [hierarchyNodes, newOverseership]);
 
   const filteredCongs = useMemo(() => {
     let list = congregations;
@@ -177,7 +182,6 @@ export default function CongregationsPage() {
       name: newName.trim(),
       code: newCode.trim(),
       overseership_id: newOverseership,
-      eldership_id: newEldership || null,
       physical_address: newAddress.trim() || null,
       gps_location: newGps.trim() || null,
       contact_number: newContact.trim() || null,
@@ -186,7 +190,7 @@ export default function CongregationsPage() {
     setSaving(false);
     if (insertErr) { setError(insertErr.message); return; }
     setToast(`Congregation "${newName.trim()}" created`);
-    setNewName(""); setNewCode(""); setNewOverseership(""); setNewEldership("");
+    setNewName(""); setNewCode(""); setNewOverseership("");
     setNewAddress(""); setNewGps(""); setNewContact(""); setNewPropertyStatus("unknown");
     setShowCreate(false);
     await loadData();
@@ -227,16 +231,9 @@ export default function CongregationsPage() {
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Overseership *</Label>
-                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newOverseership} onChange={e => { setNewOverseership(e.target.value); setNewEldership(""); }}>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newOverseership} onChange={e => setNewOverseership(e.target.value)}>
                   <option value="">Select overseership...</option>
                   {overseerships.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Eldership</Label>
-                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newEldership} onChange={e => setNewEldership(e.target.value)}>
-                  <option value="">Select eldership...</option>
-                  {elderships.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select>
               </div>
               <div className="space-y-1">

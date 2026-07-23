@@ -88,6 +88,12 @@ export default function AdminDashboard() {
 
         {/* Admin Modules */}
         <div className="grid gap-4 sm:grid-cols-2">
+          <a href="/admin/dashboard" className="block sm:col-span-2">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer border-primary/30 bg-primary/5">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Cashbook Review</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Drill down through District → Apostleship → Overseership → Congregation to review captures and approve submissions.</p></CardContent>
+            </Card>
+          </a>
           <a href="/admin/users" className="block">
             <Card className="hover:border-primary/50 transition-colors cursor-pointer">
               <CardHeader className="pb-2"><CardTitle className="text-base">User Management</CardTitle></CardHeader>
@@ -110,6 +116,12 @@ export default function AdminDashboard() {
             <Card className="hover:border-primary/50 transition-colors cursor-pointer">
               <CardHeader className="pb-2"><CardTitle className="text-base">Congregations</CardTitle></CardHeader>
               <CardContent><p className="text-sm text-muted-foreground">Manage congregation details, property info, and administrative assignments.</p></CardContent>
+            </Card>
+          </a>
+          <a href="/admin/hierarchy" className="block">
+            <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+              <CardHeader className="pb-2"><CardTitle className="text-base">Hierarchy</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">Manage Districts, Apostleships, and Overseerships.</p></CardContent>
             </Card>
           </a>
         </div>
