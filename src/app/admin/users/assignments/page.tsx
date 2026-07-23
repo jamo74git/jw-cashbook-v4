@@ -33,6 +33,7 @@ export default function AssignmentsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
 
   // Filters
@@ -72,6 +73,13 @@ export default function AssignmentsPage() {
     });
     const userData = await res.json();
 
+    if (!res.ok || userData.error) {
+      console.error("list-users API error:", userData.error ?? res.status);
+      setError(`Failed to load users: ${userData.error ?? `HTTP ${res.status}`}`);
+      setLoading(false);
+      return;
+    }
+
     // Load all congregation assignments
     const { data: assignRows } = await supabase
       .from("user_congregation_assignments")
@@ -90,6 +98,9 @@ export default function AssignmentsPage() {
         congregation_ids: (assignRows ?? []).filter(a => a.user_id === u.user_id).map(a => a.congregation_id),
       }));
       setUsers(userList);
+    } else {
+      setError("No users returned from API. Check browser console for details.");
+      console.error("userData:", userData);
     }
 
     setLoading(false);
@@ -165,6 +176,7 @@ export default function AssignmentsPage() {
         </div>
 
         {toast && <div className="rounded border border-green-300 bg-green-50 p-2 text-xs text-green-800">{toast}</div>}
+        {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">{error}</div>}
 
         {/* Filters */}
         <Card>

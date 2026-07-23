@@ -11,6 +11,7 @@ ALTER TABLE public.congregations
   ADD COLUMN IF NOT EXISTS admin_elder_id UUID REFERENCES public.officers(id),
   ADD COLUMN IF NOT EXISTS physical_address TEXT,
   ADD COLUMN IF NOT EXISTS contact_number TEXT,
+  ADD COLUMN IF NOT EXISTS gps_location TEXT,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now(),
   ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES auth.users(id);
 

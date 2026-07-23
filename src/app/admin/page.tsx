@@ -88,10 +88,10 @@ export default function AdminDashboard() {
 
         {/* Admin Modules */}
         <div className="grid gap-4 sm:grid-cols-2">
-          <a href="/admin/users/create" className="block">
+          <a href="/admin/users" className="block">
             <Card className="hover:border-primary/50 transition-colors cursor-pointer">
-              <CardHeader className="pb-2"><CardTitle className="text-base">Create User</CardTitle></CardHeader>
-              <CardContent><p className="text-sm text-muted-foreground">Create new users with role and hierarchy access.</p></CardContent>
+              <CardHeader className="pb-2"><CardTitle className="text-base">User Management</CardTitle></CardHeader>
+              <CardContent><p className="text-sm text-muted-foreground">View, edit, create, and manage all system users.</p></CardContent>
             </Card>
           </a>
           <a href="/admin/users/assignments" className="block">

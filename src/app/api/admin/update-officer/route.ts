@@ -54,6 +54,14 @@ export async function POST(request: NextRequest) {
     if ("service_status" in updates) allowedFields.service_status = updates.service_status;
     if ("first_name" in updates) allowedFields.first_name = updates.first_name;
     if ("last_name" in updates) allowedFields.last_name = updates.last_name;
+    if ("initials" in updates) allowedFields.initials = updates.initials;
+    if ("mobile_number" in updates) allowedFields.mobile_number = updates.mobile_number;
+    if ("start_date" in updates) allowedFields.start_date = updates.start_date;
+    if ("end_date" in updates) allowedFields.end_date = updates.end_date;
+    if ("initials" in updates) allowedFields.initials = updates.initials;
+    if ("mobile_number" in updates) allowedFields.mobile_number = updates.mobile_number;
+    if ("start_date" in updates) allowedFields.start_date = updates.start_date;
+    if ("end_date" in updates) allowedFields.end_date = updates.end_date;
 
     if (Object.keys(allowedFields).length === 0) {
       return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });

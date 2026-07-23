@@ -38,36 +38,45 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden. HO only." }, { status: 403 });
     }
 
-    // Create officer
     const body = await request.json();
-    const { officer_code, first_name, last_name, rank, congregation_id, service_status, initials, mobile_number } = body;
+    const { user_id, ...updates } = body;
 
-    if (!officer_code || !first_name || !rank || !congregation_id) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    if (!user_id) {
+      return NextResponse.json({ error: "user_id required" }, { status: 400 });
     }
 
-    const { data: newOfficer, error: insertErr } = await supabaseAdmin
-      .from("officers")
-      .insert({
-        officer_code,
-        first_name,
-        last_name: last_name || null,
-        initials: initials || null,
-        rank,
-        congregation_id,
-        is_active: true,
-        service_status: service_status || "serving",
-        mobile_number: mobile_number || null,
-        start_date: new Date().toISOString().split("T")[0],
-      })
-      .select("id, officer_code")
-      .single();
+    // Build update fields
+    const allowedFields: Record<string, unknown> = {};
+    if ("role" in updates) allowedFields.role = updates.role;
+    if ("congregation_id" in updates) allowedFields.congregation_id = updates.congregation_id;
+    if ("scope_level" in updates) allowedFields.scope_level = updates.scope_level;
+    if ("status" in updates) allowedFields.status = updates.status;
+    if ("hierarchy_id" in updates) allowedFields.hierarchy_id = updates.hierarchy_id;
 
-    if (insertErr) {
-      return NextResponse.json({ error: insertErr.message }, { status: 400 });
+    if (Object.keys(allowedFields).length === 0) {
+      return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, officer: newOfficer });
+    // Update user_hierarchy_access record
+    const { error: updateErr } = await supabaseAdmin
+      .from("user_hierarchy_access")
+      .update(allowedFields)
+      .eq("user_id", user_id)
+      .eq("status", "active");
+
+    // If setting inactive, update by matching user_id (any status)
+    if (updates.status === "inactive") {
+      await supabaseAdmin
+        .from("user_hierarchy_access")
+        .update({ status: "inactive" })
+        .eq("user_id", user_id);
+    }
+
+    if (updateErr) {
+      return NextResponse.json({ error: updateErr.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ success: true });
   } catch (err) {
     return NextResponse.json({ error: `Server error: ${err instanceof Error ? err.message : "Unknown"}` }, { status: 500 });
   }

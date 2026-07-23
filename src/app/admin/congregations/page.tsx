@@ -22,6 +22,7 @@ interface Congregation {
   admin_elder_id: string | null;
   physical_address: string | null;
   contact_number: string | null;
+  gps_location: string | null;
 }
 
 interface HierarchyNode { id: string; name: string; level_type: string; parent_id: string | null; }
@@ -48,6 +49,10 @@ export default function CongregationsPage() {
   const [newCode, setNewCode] = useState("");
   const [newOverseership, setNewOverseership] = useState("");
   const [newEldership, setNewEldership] = useState("");
+  const [newAddress, setNewAddress] = useState("");
+  const [newGps, setNewGps] = useState("");
+  const [newContact, setNewContact] = useState("");
+  const [newPropertyStatus, setNewPropertyStatus] = useState("unknown");
 
   // Edit panel
   const [editCong, setEditCong] = useState<Congregation | null>(null);
@@ -58,6 +63,7 @@ export default function CongregationsPage() {
     admin_elder_id: "",
     physical_address: "",
     contact_number: "",
+    gps_location: "",
   });
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t); } }, [toast]);
@@ -75,7 +81,7 @@ export default function CongregationsPage() {
   async function loadData() {
     setLoading(true);
     const [{ data: congs }, { data: nodes }, { data: offs }] = await Promise.all([
-      supabase.from("congregations").select("id, name, code, eldership_id, overseership_id, property_status, water_meter_number, electricity_meter_number, admin_elder_id, physical_address, contact_number").order("name"),
+      supabase.from("congregations").select("id, name, code, eldership_id, overseership_id, property_status, water_meter_number, electricity_meter_number, admin_elder_id, physical_address, contact_number, gps_location").order("name"),
       supabase.from("hierarchy_levels").select("id, name, level_type, parent_id").order("name"),
       supabase.from("officers").select("id, officer_code, first_name, last_name, rank, congregation_id").eq("is_active", true).order("officer_code"),
     ]);
@@ -131,6 +137,7 @@ export default function CongregationsPage() {
       admin_elder_id: cong.admin_elder_id ?? "",
       physical_address: cong.physical_address ?? "",
       contact_number: cong.contact_number ?? "",
+      gps_location: cong.gps_location ?? "",
     });
   }
 
@@ -145,6 +152,7 @@ export default function CongregationsPage() {
       admin_elder_id: editForm.admin_elder_id || null,
       physical_address: editForm.physical_address || null,
       contact_number: editForm.contact_number || null,
+      gps_location: editForm.gps_location || null,
       updated_at: new Date().toISOString(),
       updated_by: user?.id,
     }).eq("id", editCong.id);
@@ -170,11 +178,16 @@ export default function CongregationsPage() {
       code: newCode.trim(),
       overseership_id: newOverseership,
       eldership_id: newEldership || null,
+      physical_address: newAddress.trim() || null,
+      gps_location: newGps.trim() || null,
+      contact_number: newContact.trim() || null,
+      property_status: newPropertyStatus,
     });
     setSaving(false);
     if (insertErr) { setError(insertErr.message); return; }
     setToast(`Congregation "${newName.trim()}" created`);
     setNewName(""); setNewCode(""); setNewOverseership(""); setNewEldership("");
+    setNewAddress(""); setNewGps(""); setNewContact(""); setNewPropertyStatus("unknown");
     setShowCreate(false);
     await loadData();
   }
@@ -225,6 +238,26 @@ export default function CongregationsPage() {
                   <option value="">Select eldership...</option>
                   {elderships.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Property Status</Label>
+                <select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={newPropertyStatus} onChange={e => setNewPropertyStatus(e.target.value)}>
+                  <option value="unknown">Unknown</option>
+                  <option value="owned">Owned</option>
+                  <option value="leased">Leased / Rented</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Contact Number</Label>
+                <Input className="h-8 text-xs" placeholder="011..." value={newContact} onChange={e => setNewContact(e.target.value)} />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">Physical Address</Label>
+                <Input className="h-8 text-xs" placeholder="Street, suburb, city" value={newAddress} onChange={e => setNewAddress(e.target.value)} />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">GPS Location <span className="text-muted-foreground font-normal">(e.g. -26.1753, 28.0145)</span></Label>
+                <Input className="h-8 text-xs" placeholder="-26.xxxx, 28.xxxx" value={newGps} onChange={e => setNewGps(e.target.value)} />
               </div>
             </div>
             <Button size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Congregation"}</Button>
@@ -296,6 +329,18 @@ export default function CongregationsPage() {
               <div className="space-y-1">
                 <Label className="text-xs">Contact Number</Label>
                 <Input className="h-8 text-xs" value={editForm.contact_number} onChange={e => setEditForm(f => ({ ...f, contact_number: e.target.value }))} />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">GPS Location <span className="text-muted-foreground font-normal">(e.g. -26.1753, 28.0145)</span></Label>
+                <div className="flex gap-2">
+                  <Input className="h-8 text-xs flex-1" placeholder="-26.xxxx, 28.xxxx" value={editForm.gps_location} onChange={e => setEditForm(f => ({ ...f, gps_location: e.target.value }))} />
+                  {editForm.gps_location && (
+                    <a href={`https://www.google.com/maps?q=${editForm.gps_location}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-2 h-8 rounded border border-input text-xs text-blue-600 hover:bg-blue-50">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                      Map
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex gap-2">
