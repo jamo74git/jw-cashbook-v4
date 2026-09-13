@@ -1,16 +1,16 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
+import { useNavigate } from "react-router-dom";
 import { createClient } from "@/lib/supabase/client";
 import { getUserAccess } from "@/lib/permissions";
+import { signOut as clearOfflineSession } from "@/services/authService";
 import { Badge } from "@/components/ui/badge";
 import type { UserHierarchyAccess } from "@/lib/types";
 
 export function AppHeader() {
   const supabase = createClient();
-  const router = useRouter();
+  const navigate = useNavigate();
   const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [congCount, setCongCount] = useState(0);
@@ -64,8 +64,9 @@ export function AppHeader() {
   }, []);
 
   async function handleSignOut() {
+    clearOfflineSession();
     await supabase.auth.signOut();
-    router.push("/login");
+    navigate("/login");
   }
 
   const initials = displayName.slice(0, 2).toUpperCase();
@@ -75,7 +76,7 @@ export function AppHeader() {
       <div className="flex h-12 items-center justify-between px-3 max-w-[1600px] mx-auto">
         {/* Left: Logo */}
         <div className="flex items-center gap-3">
-          <Image src="/nac-logo.png" alt="NAC" width={28} height={28} className="rounded" />
+          <img src="/nac-logo.png" alt="NAC" width={28} height={28} className="rounded" />
           <span className="text-sm font-semibold text-primary hidden sm:inline">OAC Management System</span>
         </div>
 
@@ -105,7 +106,7 @@ export function AppHeader() {
                   <p className="font-medium">{displayName}</p>
                   <p className="text-muted-foreground">{access?.role} · {access?.scope_level}</p>
                 </div>
-                <button onClick={() => { setShowMenu(false); router.push("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
+                <button onClick={() => { setShowMenu(false); navigate("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings
                 </button>
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">

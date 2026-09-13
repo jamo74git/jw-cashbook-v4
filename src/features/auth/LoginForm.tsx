@@ -1,7 +1,5 @@
-"use client";
-
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router-dom";
 import { createClient } from "@/lib/supabase/client";
 import { getDashboardRoute } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -10,8 +8,24 @@ import { Label } from "@/components/ui/label";
 import { Turnstile } from "@/components/Turnstile";
 import type { Role } from "@/lib/types";
 
-export function LoginForm() {
-  const router = useRouter();
+export interface AuthenticatedContext {
+  email: string;
+  password: string;
+  role: Role;
+  turnstileToken: string | null;
+}
+
+interface LoginFormProps {
+  /**
+   * If provided, called on successful online authentication instead of navigating,
+   * so the parent can offer offline-PIN setup. Password is passed transiently in
+   * memory so activateOffline can re-authenticate; it is not persisted.
+   */
+  onAuthenticated?: (ctx: AuthenticatedContext) => void;
+}
+
+export function LoginForm({ onAuthenticated }: LoginFormProps) {
+  const navigate = useNavigate();
   const supabase = createClient();
 
   const [email, setEmail] = useState("");
@@ -20,50 +34,48 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
 
+  const siteKey = import.meta.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
-    // Step 0: Verify Turnstile (if configured)
-    if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY && !turnstileToken) {
+    // Step 0: Turnstile (if configured) — verified server-side via Edge Function.
+    if (siteKey && !turnstileToken) {
       setLoading(false);
       setError("Please complete the security verification.");
       return;
     }
-
     if (turnstileToken) {
-      const verifyRes = await fetch("/api/auth/verify-turnstile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: turnstileToken }),
+      const { data, error: verifyErr } = await supabase.functions.invoke("verify-turnstile", {
+        body: { token: turnstileToken },
       });
-      const verifyData = await verifyRes.json();
-      if (!verifyData.success) {
+      if (verifyErr || !data?.success) {
         setLoading(false);
         setError("Security verification failed. Please try again.");
         return;
       }
     }
 
-    // Step 1: Authenticate with Supabase
+    // Step 1: authenticate.
     const { data, error: authError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
-
     if (authError || !data.user) {
       setLoading(false);
       setError("Invalid email or password");
       return;
     }
 
-    // Step 2: Check user_hierarchy_access
+    // Step 2: active access record.
     const { data: access, error: accessError } = await supabase
       .from("user_hierarchy_access")
-      .select("id, role, hierarchy_id, congregation_id, scope_level, status, start_date, end_date")
+      .select("role, status, start_date, end_date")
       .eq("user_id", data.user.id)
       .eq("status", "active")
+      .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 
@@ -74,29 +86,28 @@ export function LoginForm() {
       return;
     }
 
-    // Step 3: Validate date range
-    const now = new Date().toISOString();
-    if (access.start_date && access.start_date > now) {
+    // Step 3: date window.
+    const nowIso = new Date().toISOString();
+    if (access.start_date && access.start_date > nowIso) {
       await supabase.auth.signOut();
       setLoading(false);
       setError("Your access has not yet started. Contact your administrator.");
       return;
     }
-    if (access.end_date && access.end_date < now) {
+    if (access.end_date && access.end_date < nowIso) {
       await supabase.auth.signOut();
       setLoading(false);
       setError("Your access has expired. Contact your administrator.");
       return;
     }
 
-    // Step 4: For HO users, verify district assignments
+    // Step 4: HO users must have >= 1 district assignment.
     if (access.role === "HO") {
       const { data: districts } = await supabase
         .from("ho_district_assignments")
         .select("district_id")
         .eq("user_id", data.user.id)
         .limit(1);
-
       if (!districts || districts.length === 0) {
         await supabase.auth.signOut();
         setLoading(false);
@@ -105,11 +116,15 @@ export function LoginForm() {
       }
     }
 
-    // Step 5: Route to role-specific dashboard
-    const dashboardRoute = getDashboardRoute(access.role as Role);
     setLoading(false);
-    router.push(dashboardRoute);
-    router.refresh();
+    const role = access.role as Role;
+
+    // Hand off to the parent for optional PIN setup, or route to the dashboard.
+    if (onAuthenticated) {
+      onAuthenticated({ email: email.trim(), password, role, turnstileToken });
+    } else {
+      navigate(getDashboardRoute(role));
+    }
   }
 
   return (
@@ -141,7 +156,7 @@ export function LoginForm() {
         />
       </div>
 
-      {/* Turnstile widget — only renders if NEXT_PUBLIC_TURNSTILE_SITE_KEY is set */}
+      {/* Renders only if NEXT_PUBLIC_TURNSTILE_SITE_KEY is set */}
       <Turnstile
         onVerify={(token) => setTurnstileToken(token)}
         onError={() => setError("Security verification failed. Please refresh.")}

@@ -1,0 +1,12 @@
+# Supabase project configuration (Edge Functions).
+# Both functions perform their own authorization internally, so JWT verification is
+# disabled at the gateway (verify-turnstile runs pre-auth at login; admin-write does
+# its own Bearer + HO-role gate). See each function's index.ts.
+
+project_id = "jw-cashbook-v4"
+
+[functions.verify-turnstile]
+verify_jwt = false
+
+[functions.admin-write]
+verify_jwt = false

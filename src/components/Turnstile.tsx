@@ -23,7 +23,7 @@ export function Turnstile({ onVerify, onError }: TurnstileProps) {
   const widgetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    const siteKey = import.meta.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
     if (!siteKey) return; // Skip if not configured
 
     function renderWidget() {
@@ -63,7 +63,7 @@ export function Turnstile({ onVerify, onError }: TurnstileProps) {
   }, []);
 
   // Don't render anything if no site key configured
-  if (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) return null;
+  if (!import.meta.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) return null;
 
   return <div ref={containerRef} className="mt-2" />;
 }

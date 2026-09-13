@@ -6,6 +6,10 @@ node_modules/
 .next.nosync
 out/
 
+# vite build output
+dist/
+dev-dist/
+
 # environment
 .env
 .env.local
