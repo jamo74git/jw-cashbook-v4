@@ -22,6 +22,7 @@ export default function HODashboardPage() {
   const [periods, setPeriods] = useState<PeriodSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
+  const [showAllStatuses, setShowAllStatuses] = useState(false);
 
   // Drill state
   const [drillLevel, setDrillLevel] = useState<"district" | "apostleship" | "overseership" | "congregation">("district");
@@ -91,8 +92,13 @@ export default function HODashboardPage() {
       draft: ps.filter(p => p.status === "Draft").length,
       submitted: ps.filter(p => p.status === "Submitted").length,
       approved: ps.filter(p => p.status === "AuditApproved").length,
-      toOverseer: ps.filter(p => ["SubmittedToOverseer", "SubmittedToHO", "HOReviewed"].includes(p.status)).length,
+      toHO: ps.filter(p => ["SubmittedToHO", "HOReviewed"].includes(p.status)).length,
     };
+  }
+
+  // For the default view, only count congregations that have SubmittedToHO periods
+  function hasSubmittedToHO(congIds: string[]) {
+    return periods.some(p => congIds.includes(p.congregation_id) && ["SubmittedToHO", "HOReviewed"].includes(p.status));
   }
 
   // Current view items
