@@ -89,16 +89,39 @@ This document is requirements-only. Requirement 1 (Treasurer Capture Flow) is gr
 3. THE Edge Function SHALL never expose the service-role key to the client.
 4. THE required fields per action SHALL match the original Next.js routes (`create-officer`, `update-officer`, `create-user`, `update-user`, `list-users`), reconfirmed from `f6145ff1`.
 
-### Requirement 5: Auditor Review
+### Requirement 5: Auditor Review (online-only) — grounded in f6145ff1
 
-**User Story:** As an Auditor, I want to review submitted periods with totals and proofs and approve or reject them, so that the audit workflow functions.
+**User Story:** As an Auditor, I want an online dashboard of periods submitted for audit and a detailed review screen where I verify each section against its proofs and approve or reject with commentary, so that only balanced, evidenced periods advance.
 
 #### Acceptance Criteria
 
-1. THE Auditor SHALL see a queue of periods pending audit, and SHALL open a read-only detail view showing per-section totals and proof indicators (per the historical `audit/[service_id]` view).
-2. THE Auditor SHALL be able to Approve (advancing status to AuditApproved) or Reject with a comment (status AuditRejected), with the action logged to `audit_log`.
-3. Officer-identifying detail SHALL follow the permission matrix (masking where required); proof links SHALL be available to the Auditor.
-4. _Exact layout and fields SHALL be reconfirmed from `f6145ff1` audit pages during implementation._
+**Access & scope**
+1. THE audit dashboard and review screen SHALL require `hasPermission(role, "audit.view_queue")`; otherwise render "Access denied. Auditor role required."
+2. THE audit views SHALL be **online-only** (read live from Supabase; no Dexie/offline path) and SHALL rely on Supabase RLS to scope data to the auditor's congregation.
+
+**Dashboard (audit list)**
+3. THE dashboard SHALL load the auditor's congregation and show a **Pending Audit** count plus a "Services Awaiting Review" list of `cashbook_period` rows where `congregation_id = user's congregation` AND `status = "Submitted"`, ordered by year/month/week descending.
+4. THE dashboard SHALL show a **Recent Audit History** list of the last 10 periods with `status IN ("AuditApproved", "Rejected")`.
+5. EACH list item SHALL be labelled `"{Mon} {Year} — Week {n} ({AM|PM})"` and link to the detail review at `/audit/{periodId}`.
+
+**Detail review**
+6. THE review screen SHALL load the period, its `cashbook_line_item` rows, related `cashbook_attachment` rows, and the congregation's officers, and SHALL present four sections: **Banking Detail** (Direct Debit / EFT / Cash Banked subtotals + BANKING TOTAL), **Cash Pending** (cash income + cash burial + TOTAL CASH), **Burial**, and **Expenses**, plus summary cards (EFT / Direct Debit / Cash) and a Grand Total (Income − Expenses).
+7. THE review screen SHALL display officer identity **masked to the officer code only** (never full name).
+8. FOR each line item requiring proof, THE screen SHALL show a proof indicator: a green clickable link opening the attachment `file_url` in a new tab when an attachment exists, or a red (missing) indicator otherwise. Bulk-deposited cash items SHALL surface their shared deposit-slip attachment.
+
+**State-change gates**
+9. THE Audit Decision panel SHALL appear only WHEN `period.status = "Submitted"` AND the user has `audit.approve` or `audit.reject`.
+10. THE panel SHALL present four per-section **"Verified" checkboxes** (Banking, Cash, Burial, Expenses); **Approve SHALL be disabled until all four are checked**.
+11. WHEN the auditor approves, THE system SHALL set `cashbook_period.status = "AuditApproved"` and `audit_comment` (defaulting to "Approved"), and SHALL log an `AUDIT_APPROVE` entry to `audit_log`.
+12. **Reject SHALL require a non-empty comment**; WHEN the auditor rejects, THE system SHALL set `status = "Rejected"` and `audit_comment = comment`, and SHALL log an `AUDIT_REJECT` entry.
+13. IF an Elder or Chairperson performs the approve/reject via an Override (`O`) permission, THEN THE system SHALL confirm and log a `SELF_REVIEW_EXCEPTION` (`assumedRole: "Auditor"`) before the write.
+14. AFTER a decision, THE screen SHALL navigate back to the role's dashboard (Elder → /elder, Chairperson → /chairperson, else /audit).
+
+**Concurrency**
+15. THE approve/reject write SHALL guard against double-audit by only updating rows still in `status = "Submitted"` (a stale period already actioned SHALL NOT be overwritten).
+
+**Privileged backend**
+16. THE audit status changes SHALL be performed as direct RLS-gated Supabase updates (as in the original); NO new Edge Function is required for the auditor slice.
 
 ### Requirement 6: Elder & Chairperson Dashboards
 

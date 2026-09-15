@@ -12,6 +12,8 @@ import { ReloadPrompt } from "./pwa/ReloadPrompt";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { CapturePage } from "@/capture/CapturePage";
 import { AppShell } from "@/components/AppShell";
+import { AuditDashboard } from "@/audit/AuditDashboard";
+import { AuditReviewPage } from "@/audit/AuditReviewPage";
 
 // Code-split the two layout roots so an offline Capture load never pulls Admin code.
 const CaptureLayout = lazy(() => import("./capture/CaptureLayout"));
@@ -19,7 +21,7 @@ const AdminLayout = lazy(() => import("./admin/AdminLayout"));
 
 // Role dashboards not yet rebuilt in the Vite app; routed to a placeholder so users
 // land somewhere with a header + sign-out instead of bouncing back to /login.
-const ROLE_DASHBOARDS = ["/dashboard", "/treasurer", "/elder", "/chairperson", "/review", "/audit", "/reports"];
+const ROLE_DASHBOARDS = ["/dashboard", "/treasurer", "/elder", "/chairperson", "/review", "/reports"];
 
 function Loading() {
   return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -120,6 +122,9 @@ export function App() {
             {ROLE_DASHBOARDS.map((path) => (
               <Route key={path} path={path} element={<RoleHome />} />
             ))}
+            {/* Auditor portal (online-only; in-page audit.view_queue gate). */}
+            <Route path="/audit" element={<AuditDashboard />} />
+            <Route path="/audit/:periodId" element={<AuditReviewPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/login" replace />} />

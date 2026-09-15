@@ -113,3 +113,81 @@ TypeScript throughout. Property tests use **fast-check** (min 100 runs), tagged
   ]
 }
 ```
+
+
+---
+
+# Implementation Plan — Auditor Review Slice (Slice 2)
+
+Scope: the online-only Auditor portal (Requirement 5). Direct live Supabase reads/writes
+under RLS; NO Dexie, sync engine, or Treasurer/PWA files touched. Realtime subscription
+and optimistic row-lock are in scope. Reuses `captureTotals` and `permissions.ts`.
+
+> Routing note: audit lives at top-level `/audit` and `/audit/:periodId` (NOT under
+> `/admin`, which is HO-only). In-page permission checks gate access, matching f6145ff1.
+
+## Tasks
+
+- [ ] 10. Routing & guard infrastructure
+  - [ ] 10.1 Add audit routes to `src/App.tsx`
+    - Replace the `/audit` role-dashboard placeholder with `AuditDashboard`; add `/audit/:periodId` → `AuditReviewPage`. Wrap both in the authenticated guard (`Protected area="any"`); the pages enforce `audit.view_queue` in-page. Online-only: render an offline-unavailable state when offline.
+    - _Requirements: 5.1, 5.2_
+
+- [ ] 11. Audit dashboard view (`src/audit/AuditDashboard.tsx`)
+  - [ ] 11.1 Load congregation + queues
+    - Resolve access; load the auditor's congregation; query pending = `cashbook_period` where `congregation_id` matches AND `status="Submitted"` ordered year/month/week desc; history = `status IN ("AuditApproved","Rejected")` limit 10.
+    - _Requirements: 5.3, 5.4_
+  - [ ] 11.2 Render queue + history layout
+    - Pending count banner, "Services Awaiting Review" list, "Recent Audit History" list; each item labelled `"{Mon} {Year} — Week {n} ({AM|PM})"` with congregation/year/month/week context; navigate to `/audit/:periodId`.
+    - _Requirements: 5.3, 5.4, 5.5_
+  - [ ] 11.3 Access gate
+    - If `!hasPermission(role, "audit.view_queue")` → "Access denied. Auditor role required."
+    - _Requirements: 5.1_
+
+- [ ] 12. Detail review screen (`src/audit/AuditReviewPage.tsx`)
+  - [ ] 12.1 Proof viewer component `src/audit/ProofLink.tsx`
+    - Paperclip indicator: green link opening `file_url` in a new tab when an attachment exists; red (missing) otherwise. Handles individual proofs and shared bulk deposit-slip attachments.
+    - _Requirements: 5.8_
+  - [ ] 12.2 Identity masking utility
+    - Map `officer_id` → `officer_code` only (never full name); "—" when null.
+    - _Requirements: 5.7_
+  - [ ] 12.3 Load + render section panels
+    - Load period, line items, attachments, officers. Render 5 panels: Banking Detail (DD/EFT/CashBanked subtotals + BANKING TOTAL), Cash Pending (cash income + cash burial + TOTAL CASH), Burial, Expenses, and Summary/Grand Total (Income − Expenses) + EFT/DD/Cash summary cards. Reuse `captureTotals` (`bankingView`, `sectionTotals`, `expensesTotal`).
+    - _Requirements: 5.6, 5.7, 5.8_
+
+- [ ] 13. State machine + concurrency + realtime
+  - [ ] 13.1 Verification checklist hard-gate
+    - Four per-section "Verified" checkboxes (Banking/Cash/Burial/Expenses); Approve disabled until all four checked. Decision panel only renders when `status="Submitted"` AND `audit.approve || audit.reject`.
+    - _Requirements: 5.9, 5.10_
+  - [ ] 13.2 Approve / reject writes with optimistic lock
+    - Approve → `update cashbook_period set status="AuditApproved", audit_comment=<comment|"Approved"> where id=? and status="Submitted"`; Reject (mandatory non-empty comment) → `status="Rejected", audit_comment=comment` with the same `status="Submitted"` guard. If 0 rows affected → "already audited" notice + reload. Log `AUDIT_APPROVE`/`AUDIT_REJECT` to `audit_log`. Elder/Chairperson override → confirm + `logSelfReviewException(assumedRole:"Auditor")` before write. Navigate back by role (Elder→/elder, Chairperson→/chairperson, else /audit).
+    - _Requirements: 5.11, 5.12, 5.13, 5.14, 5.15_
+  - [ ] 13.3 Supabase Realtime subscription
+    - Dashboard: subscribe to `cashbook_period` changes for the congregation → live-refresh pending/history. Review screen: if the open period's status changes externally, disable the decision panel and prompt reload. Clean up subscriptions on unmount. Degrade gracefully if realtime is unavailable (optimistic lock remains authoritative).
+    - _Requirements: 5.15 (+ realtime enhancement)_
+
+- [ ] 14. Workspace verification
+  - Run `tsc --noEmit` and `vite build`; confirm zero errors/regressions and that no Treasurer/Dexie files changed.
+  - _Requirements: 5 (all)_
+
+## Notes (Auditor slice)
+
+- Online-only; no `*` property-test subtasks (no pure-logic surface beyond the reused,
+  already-tested `captureTotals`). Verification is typecheck + build + manual runtime.
+- Do NOT touch Treasurer PWA files, `captureRepo`, `syncEngine`, or the Dexie schema.
+- No Edge Function changes (audit writes are direct RLS-gated updates).
+
+## Task Dependency Graph (Auditor slice)
+
+```json
+{
+  "waves": [
+    { "id": 0, "tasks": ["10.1", "12.1", "12.2"] },
+    { "id": 1, "tasks": ["11.1", "11.3", "12.3"] },
+    { "id": 2, "tasks": ["11.2", "13.1"] },
+    { "id": 3, "tasks": ["13.2"] },
+    { "id": 4, "tasks": ["13.3"] },
+    { "id": 5, "tasks": ["14"] }
+  ]
+}
+```
