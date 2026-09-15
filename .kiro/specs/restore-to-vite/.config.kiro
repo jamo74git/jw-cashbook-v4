@@ -1,0 +1,5 @@
+{
+  "specId": "restore-to-vite",
+  "workflowType": "requirements-first",
+  "specType": "feature"
+}

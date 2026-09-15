@@ -1,42 +1,51 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// LOCAL_STORE — Dexie.js (IndexedDB) schema for the offline-first Capture_App.
-// Database: oac_cashbook_local, version 1.
-// Record types reuse the canonical enums from @/lib/types (Role, ServiceStatus,
-// HierarchyLevel, LineSection, IncomeType) rather than redefining string literals.
-// Stores/indexes match design.md "Dexie Schema Declaration".
+// LOCAL_STORE — Dexie.js (IndexedDB), version 2.
+// v2 realigns the offline mirror to the REAL Supabase schema:
+//   periods            <- cashbook_period (via get_or_create_period RPC at sync)
+//   lineItems          <- cashbook_line_item
+//   (proof Blob fields) <- cashbook_attachment (created at sync from the Blob)
+//   congregationSettings <- congregation_settings (proof_mandatory)
+// The obsolete v1 `captureQueue` (cashbook_service shape) is dropped. There is no
+// production offline data yet, so the v2 upgrade clears legacy local rows.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Dexie, { type Table } from "dexie";
-import type {
-  Role,
-  ServiceStatus,
-  HierarchyLevel,
-  LineSection,
-  IncomeType,
-  ProofStatus,
-} from "@/lib/types";
+import type { Role, HierarchyLevel, LineSection } from "@/lib/types";
 
-// ─── Cached_Credential (Req 4, 5, 15) ───────────────────────────────────────
-// Offline PIN authentication material. The raw PIN is NEVER stored; only the
-// PBKDF2-derived hash, its salt/iterations, and a PIN-keyed HMAC integrity tag.
+export type LocalSyncStatus = "pending" | "syncing" | "synced" | "conflict" | "failed";
+
+// Real cashbook_period.status vocabulary (from f6145ff1) — NOTE this differs from the
+// ServiceStatus enum in @/lib/types (Draft/PendingAudit/...); the app must write these
+// real values. Discrepancy recorded for a later steering reconciliation.
+export type PeriodStatus = "Draft" | "Rejected" | "Submitted" | "AuditApproved";
+
+export type ItemType =
+  | "EFT"
+  | "DirectDebit"
+  | "Cash"
+  | "CashPending"
+  | "CashBanked"
+  | "Burial"
+  | "Expense";
+
+// ─── Cached_Credential (offline PIN auth) ────────────────────────────────────
 export interface CachedCredential {
-  userId: string; // primary key
-  pinHash: string; // base64 PBKDF2-derived bits (SHA-256)
-  salt: string; // base64, per-user (crypto.getRandomValues)
-  kdfIterations: number; // work factor, recorded for forward compatibility
-  hmac: string; // base64 HMAC over integrity-protected fields
-  role: Role; // cached role metadata
-  accessStartDate: string; // Access_Window start (ISO)
-  accessEndDate: string | null; // Access_Window end (ISO)
-  activatedAt: string; // ISO timestamp of activation
-  failedAttempts: number; // consecutive offline unlock failures
-  lockedUntil: string | null; // set when lockout triggers (ISO)
+  userId: string;
+  pinHash: string;
+  salt: string;
+  kdfIterations: number;
+  hmac: string;
+  role: Role;
+  accessStartDate: string;
+  accessEndDate: string | null;
+  activatedAt: string;
+  failedAttempts: number;
+  lockedUntil: string | null;
 }
 
-// ─── Reference lookup caches (offline capture pickers, Req 11) ───────────────
-// Read-only mirrors of Supabase tables, populated online and read offline.
+// ─── Reference lookups (populated online by cacheLoader) ─────────────────────
 export interface CongregationLookup {
-  id: string; // primary key
+  id: string;
   name: string;
   code: string;
   overseership_id: string | null;
@@ -46,70 +55,88 @@ export interface CongregationLookup {
 }
 
 export interface HierarchyLookup {
-  id: string; // primary key
+  id: string;
   name: string;
   code: string;
   level_type: HierarchyLevel;
   parent_id: string | null;
 }
 
-// Officer lookup — offline picker for Members/Officers tithing capture. Mirrored from
-// the Supabase `officers` table (design's Dexie schema omitted this; required for
-// offline capture of officer/member tithing).
 export interface OfficerLookup {
-  id: string; // primary key
-  congregation_id: string; // indexed
+  id: string;
+  congregation_id: string;
   officer_code: string;
   first_name: string;
-  last_name: string;
-  rank: string;
+  last_name: string | null;
+  rank: string; // "Priest" | "Underdeacon" | ...
   is_active: boolean;
 }
 
-// ─── Offline transaction queue (Req 3, 14) ───────────────────────────────────
-export type LocalSyncStatus = "pending" | "syncing" | "synced" | "conflict" | "failed";
-
-export interface QueuedRecord {
-  localId: string; // primary key (client-generated UUID)
-  entityType: string; // 'cashbook_service' | 'banking' | 'census' | 'override_audit' ...
-  payload: Record<string, unknown>; // the record body to persist
-  congregationId: string; // scoping (indexed)
-  capturedByUserId: string; // identity at capture time (Req 3.5)
-  capturedRole: Role; // role at capture time (Req 3.5)
-  localStatus: LocalSyncStatus; // indexed
-  serviceStatus: ServiceStatus; // domain status for status-flow validation
-  createdAt: string; // ordering key (indexed)
-  updatedAt: string;
-  syncAttempts: number; // retry/backoff bookkeeping
-  lastError: string | null;
-  serverId: string | null; // set after successful sync (indexed)
+export interface CongregationSettings {
+  congregation_id: string; // pk
+  proof_mandatory: boolean;
 }
 
-// Child line items keyed to a queued service via serviceLocalId.
-export interface QueuedLineItem {
-  localId: string; // primary key (client UUID)
-  serviceLocalId: string; // FK -> QueuedRecord.localId (indexed)
+// ─── Local period (mirrors cashbook_period) ──────────────────────────────────
+// A provisional period is created offline keyed by naturalKey; the sync engine
+// reconciles it to a server cashbook_period.id via get_or_create_period.
+export interface LocalPeriod {
+  localId: string; // client UUID (pk)
+  naturalKey: string; // `${congregationId}|${weekKey}|${service}` (unique)
+  serverId: string | null; // cashbook_period.id once reconciled
+  congregationId: string;
+  year: number;
+  month: number;
+  week: number;
+  weekKey: string; // YYYY-MM-Wn
+  service: "AM" | "PM";
+  status: PeriodStatus; // Draft/Rejected editable; Submitted locks
+  submittedAt: string | null;
+  capturedByUserId: string;
+  // R500 governance comments (Req 1.15), stored on submit.
+  requestorComment: string | null;
+  elderApprovalComment: string | null;
+  // Bulk cash deposit slip (offline): one slip applied to all cash items on sync.
+  depositBlob: Blob | null;
+  depositFileName: string | null;
+  depositDate: string | null;
+  depositBankRef: string | null;
+  localStatus: LocalSyncStatus;
+  createdAt: string;
+  updatedAt: string;
+  syncAttempts: number;
+  lastError: string | null;
+}
+
+// ─── Local line item (mirrors cashbook_line_item + offline proof) ────────────
+export interface LocalLineItem {
+  localId: string; // pk
+  periodLocalId: string; // FK -> LocalPeriod.localId
+  serverId: string | null; // cashbook_line_item.id once synced
   section: LineSection;
+  is_officer: boolean;
+  item_type: ItemType;
+  payment_type: string | null;
   officer_id: string | null;
-  officer_code: string | null;
-  income_type: IncomeType | null;
   amount: number;
   item_count: number | null;
-  manual_reference: string | null;
-  expense_date: string | null;
-  expense_description: string | null;
-  // Offline proof handling: the image is stored locally as a Blob and uploaded to
-  // Supabase Storage by the Sync_Engine on reconnect. proof_image_url is set only
-  // once the server upload succeeds.
-  proof_status: ProofStatus | null;
+  receipt_number: string | null; // Burial
+  manual_reference: string | null; // Expense description
+  transaction_date: string | null;
+  proof_status: string | null; // "uploaded" once synced
+  proof_reference: string | null; // EFT/DD bank ref
+  // Offline proof: held locally as a Blob; uploaded to cashbook-proofs + a
+  // cashbook_attachment row created at sync time.
   proofBlob: Blob | null;
   proofFileName: string | null;
-  proof_image_url: string | null;
+  proofBankRef: string | null;
+  proofDate: string | null;
+  localStatus: LocalSyncStatus;
 }
 
 // ─── Sync bookkeeping ─────────────────────────────────────────────────────────
 export interface SyncMeta {
-  key: string; // primary key, e.g. 'global'
+  key: string; // pk, e.g. 'global'
   lastSyncAt: string | null;
   lastReferenceRefreshAt: string | null;
   schemaVersion: number;
@@ -121,12 +148,15 @@ export class OacCashbookLocalDB extends Dexie {
   congregations!: Table<CongregationLookup, string>;
   hierarchyLevels!: Table<HierarchyLookup, string>;
   officers!: Table<OfficerLookup, string>;
-  captureQueue!: Table<QueuedRecord, string>;
-  lineItems!: Table<QueuedLineItem, string>;
+  congregationSettings!: Table<CongregationSettings, string>;
+  periods!: Table<LocalPeriod, string>;
+  lineItems!: Table<LocalLineItem, string>;
   syncMeta!: Table<SyncMeta, string>;
 
   constructor() {
     super("oac_cashbook_local");
+
+    // v1 — legacy dev shape (cashbook_service), retained only for the upgrade path.
     this.version(1).stores({
       credentials: "userId",
       congregations: "id, district_id, overseership_id",
@@ -136,6 +166,20 @@ export class OacCashbookLocalDB extends Dexie {
       lineItems: "localId, serviceLocalId",
       syncMeta: "key",
     });
+
+    // v2 — realign to the real cashbook_period / cashbook_line_item model.
+    this.version(2)
+      .stores({
+        captureQueue: null, // drop obsolete dev store
+        congregationSettings: "congregation_id",
+        officers: "id, congregation_id, rank",
+        periods: "localId, &naturalKey, serverId, localStatus, congregationId, weekKey",
+        lineItems: "localId, periodLocalId, section, serverId, localStatus",
+      })
+      .upgrade(async (tx) => {
+        // No production offline data exists; clear obsolete v1 line items.
+        await tx.table("lineItems").clear();
+      });
   }
 }
 

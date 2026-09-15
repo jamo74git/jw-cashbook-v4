@@ -1,18 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// SYNC_ENGINE — offline transaction queue reconciliation (Req 14, 10.5)
-// Reads pending Local_Store records ordered by createdAt, validates status
-// transitions against the Service_Status_Flow, detects conflicts when the server
-// has advanced, uploads proof blobs, flushes override-audit records, and retries
-// failures with exponential backoff. RLS enforces row scope on every write.
+// SYNC_ENGINE (v2) — offline → online reconciliation for the cashbook_period model.
+// For each pending local period: resolve the server period via get_or_create_period,
+// detect downstream conflicts, upsert line items to cashbook_line_item, upload proof
+// Blobs to cashbook-proofs and create cashbook_attachment rows (incl. the bulk cash
+// deposit slip), and apply the submit transition. Retries failures with backoff.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@/lib/supabase/client";
-import { db, type QueuedRecord, type QueuedLineItem } from "@/db/schema";
-import { isValidTransition, isDownstreamOf } from "@/utils/statusFlow";
-import type { ServiceStatus } from "@/lib/types";
+import { db, type LocalPeriod, type LocalLineItem, type PeriodStatus } from "@/db/schema";
 
 const BASE_BACKOFF_MS = 2_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
+const PROOF_BUCKET = "cashbook-proofs";
 
 export interface SyncReport {
   attempted: number;
@@ -22,219 +21,242 @@ export interface SyncReport {
   skipped: number;
 }
 
-/** Exponential backoff for a given attempt count. */
 export function backoffDelayMs(attempts: number): number {
   return Math.min(BASE_BACKOFF_MS * 2 ** attempts, MAX_BACKOFF_MS);
 }
 
-/** Whether a failed record is due for another attempt given its last update time. */
-export function isDueForRetry(record: QueuedRecord, now: Date = new Date()): boolean {
-  if (record.localStatus !== "failed") return true;
-  const last = new Date(record.updatedAt).getTime();
-  return now.getTime() - last >= backoffDelayMs(record.syncAttempts);
+export function isDueForRetry(period: LocalPeriod, now: Date = new Date()): boolean {
+  if (period.localStatus !== "failed") return true;
+  return now.getTime() - new Date(period.updatedAt).getTime() >= backoffDelayMs(period.syncAttempts);
 }
 
 function isOnline(): boolean {
   return typeof navigator === "undefined" ? true : navigator.onLine;
 }
 
-/**
- * Reconcile all pending/failed records. Ordered by createdAt so captures apply in
- * the sequence they were made (Req 14.1).
- */
+// Conflict rank over the real cashbook_period vocabulary.
+const STATUS_RANK: Record<PeriodStatus, number> = {
+  Draft: 0,
+  Rejected: 0,
+  Submitted: 1,
+  AuditApproved: 2,
+};
+function isServerDownstream(server: PeriodStatus, local: PeriodStatus): boolean {
+  return (STATUS_RANK[server] ?? 0) > (STATUS_RANK[local] ?? 0);
+}
+
+type SB = ReturnType<typeof createClient>;
+
 export async function syncPending(now: Date = new Date()): Promise<SyncReport> {
   const report: SyncReport = { attempted: 0, synced: 0, conflicts: 0, failed: 0, skipped: 0 };
   if (!isOnline()) return report;
 
   const supabase = createClient();
-
-  const pending = (await db.captureQueue.toArray())
-    .filter((r) => r.localStatus === "pending" || r.localStatus === "failed")
+  const pending = (await db.periods.toArray())
+    .filter((p) => p.localStatus === "pending" || p.localStatus === "failed")
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 
-  for (const record of pending) {
-    // Respect exponential backoff for previously-failed records (Req 14.3).
-    if (!isDueForRetry(record, now)) {
+  for (const period of pending) {
+    if (!isDueForRetry(period, now)) {
       report.skipped++;
       continue;
     }
     report.attempted++;
-    await db.captureQueue.update(record.localId, { localStatus: "syncing" });
-
+    await db.periods.update(period.localId, { localStatus: "syncing" });
     try {
-      if (record.entityType === "override_audit") {
-        await flushOverrideAudit(supabase, record);
-        await markSynced(record.localId);
-        report.synced++;
-        continue;
-      }
-
-      // cashbook_service reconciliation.
-      const outcome = await reconcileService(supabase, record);
-      if (outcome === "conflict") {
-        await db.captureQueue.update(record.localId, { localStatus: "conflict" });
-        report.conflicts++;
-      } else if (outcome === "synced") {
-        report.synced++;
-      } else {
-        await recordFailure(record, "Rejected transition");
-        report.failed++;
-      }
+      const outcome = await reconcilePeriod(supabase, period);
+      if (outcome === "conflict") report.conflicts++;
+      else report.synced++;
     } catch (err) {
-      await recordFailure(record, err instanceof Error ? err.message : "Unknown error");
+      await recordFailure(period, err instanceof Error ? err.message : "Unknown error");
       report.failed++;
     }
   }
 
+  const meta = await db.syncMeta.get("global");
   await db.syncMeta.put({
     key: "global",
     lastSyncAt: now.toISOString(),
-    lastReferenceRefreshAt: (await db.syncMeta.get("global"))?.lastReferenceRefreshAt ?? null,
-    schemaVersion: 1,
+    lastReferenceRefreshAt: meta?.lastReferenceRefreshAt ?? null,
+    schemaVersion: 2,
   });
   return report;
 }
 
-type ReconcileOutcome = "synced" | "conflict" | "rejected";
+type Outcome = "synced" | "conflict";
 
-async function reconcileService(
-  supabase: ReturnType<typeof createClient>,
-  record: QueuedRecord
-): Promise<ReconcileOutcome> {
-  // If already synced once, fetch server status to detect conflicts / illegal moves.
-  let serverStatus: ServiceStatus | null = null;
-  if (record.serverId) {
-    const { data } = await supabase
-      .from("cashbook_service")
-      .select("status")
-      .eq("id", record.serverId)
-      .maybeSingle();
-    serverStatus = (data?.status as ServiceStatus | undefined) ?? null;
-  }
+async function reconcilePeriod(supabase: SB, period: LocalPeriod): Promise<Outcome> {
+  // 1) Resolve the server period (cannot run offline; this is the sync path).
+  const { data: serverPeriod, error: rpcErr } = await supabase.rpc("get_or_create_period", {
+    p_congregation_id: period.congregationId,
+    p_week_key: period.weekKey,
+    p_service: period.service,
+    p_user_id: period.capturedByUserId,
+  });
+  if (rpcErr || !serverPeriod) throw new Error(rpcErr?.message ?? "get_or_create_period failed");
 
-  // Conflict: server has advanced strictly beyond the locally captured status (Req 14.6).
-  if (serverStatus && isDownstreamOf(serverStatus, record.serviceStatus)) {
-    await persistConflictAudit(supabase, record, serverStatus);
+  const serverId = (serverPeriod as { id: string }).id;
+  const serverStatus = (serverPeriod as { status?: PeriodStatus }).status ?? "Draft";
+  await db.periods.update(period.localId, { serverId });
+
+  // 2) Conflict: server has advanced beyond the local capture — do not overwrite.
+  if (isServerDownstream(serverStatus, period.status)) {
+    await persistConflictAudit(supabase, period, serverId, serverStatus);
+    await db.periods.update(period.localId, { localStatus: "conflict" });
     return "conflict";
   }
 
-  // Enforce a valid transition (Req 14.4, 14.5, 14.7).
-  if (!isValidTransition(serverStatus, record.serviceStatus, record.capturedRole)) {
-    return "rejected";
-  }
-
-  // Upsert the service.
-  const serviceRow = {
-    ...record.payload,
-    status: record.serviceStatus,
-    ...(record.serverId ? { id: record.serverId } : {}),
-  };
-  const { data: upserted, error } = await supabase
-    .from("cashbook_service")
-    .upsert(serviceRow)
-    .select("id")
-    .single();
-  if (error) throw new Error(error.message);
-
-  const serverId = (upserted?.id as string) ?? record.serverId;
-
-  // Sync child line items (upload proofs first).
-  const items = await db.lineItems.where("serviceLocalId").equals(record.localId).toArray();
+  // 3) Upsert line items + their proofs.
+  const items = await db.lineItems.where("periodLocalId").equals(period.localId).toArray();
   for (const item of items) {
-    await syncLineItem(supabase, serverId, item);
+    await syncLineItem(supabase, serverId, period, item);
   }
 
-  await markSynced(record.localId, serverId);
+  // 4) Bulk cash deposit slip: one upload, an attachment per banked item.
+  if (period.depositBlob) {
+    await syncDepositSlip(supabase, serverId, period, items);
+  }
+
+  // 5) Apply the submit transition (Draft/Rejected -> Submitted) to cashbook_period.
+  if (period.status === "Submitted") {
+    const { error } = await supabase
+      .from("cashbook_period")
+      .update({
+        status: "Submitted",
+        submitted_at: period.submittedAt ?? new Date().toISOString(),
+        requestor_comment: period.requestorComment,
+        elder_approval_comment: period.elderApprovalComment,
+      })
+      .eq("id", serverId);
+    if (error) throw new Error(error.message);
+  }
+
+  await db.periods.update(period.localId, {
+    localStatus: "synced",
+    updatedAt: new Date().toISOString(),
+  });
   return "synced";
 }
 
 async function syncLineItem(
-  supabase: ReturnType<typeof createClient>,
-  serviceServerId: string,
-  item: QueuedLineItem
+  supabase: SB,
+  periodServerId: string,
+  period: LocalPeriod,
+  item: LocalLineItem
 ): Promise<void> {
-  let proofUrl = item.proof_image_url;
-
-  // Upload a locally-stored proof blob if present and not yet uploaded.
-  if (item.proofBlob && !proofUrl) {
-    const path = `proofs/${serviceServerId}/${item.localId}_${Date.now()}_${item.proofFileName ?? "proof"}`;
-    const { error: upErr } = await supabase.storage.from("proof-images").upload(path, item.proofBlob);
-    if (upErr) throw new Error(`Proof upload failed: ${upErr.message}`);
-    proofUrl = supabase.storage.from("proof-images").getPublicUrl(path).data.publicUrl;
-    await db.lineItems.update(item.localId, {
-      proof_image_url: proofUrl,
-      proof_status: "Uploaded",
-      proofBlob: null,
-    });
-  }
-
-  const { error } = await supabase.from("cashbook_line_item").upsert({
-    service_id: serviceServerId,
+  // Upsert the line item (obtain its server id for attachments).
+  const row = {
+    ...(item.serverId ? { id: item.serverId } : {}),
+    period_id: periodServerId,
     section: item.section,
+    is_officer: item.is_officer,
+    item_type: item.item_type,
+    payment_type: item.payment_type,
     officer_id: item.officer_id,
-    officer_code: item.officer_code,
-    income_type: item.income_type,
     amount: item.amount,
     item_count: item.item_count,
+    receipt_number: item.receipt_number,
     manual_reference: item.manual_reference,
-    expense_date: item.expense_date,
-    expense_description: item.expense_description,
+    transaction_date: item.transaction_date,
     proof_status: item.proof_status,
-    proof_image_url: proofUrl,
-  });
+    proof_reference: item.proof_reference,
+  };
+  const { data: saved, error } = await supabase
+    .from("cashbook_line_item")
+    .upsert(row)
+    .select("id")
+    .single();
   if (error) throw new Error(error.message);
+  const lineServerId = (saved?.id as string) ?? item.serverId ?? "";
+  await db.lineItems.update(item.localId, { serverId: lineServerId });
+
+  // Upload an individual proof Blob (EFT/DD/Burial/Expense) if present.
+  if (item.proofBlob && lineServerId) {
+    const url = await uploadProof(supabase, period, item.proofBlob, item.proofFileName ?? "proof.jpg");
+    await supabase.from("cashbook_attachment").insert({
+      line_item_id: lineServerId,
+      file_url: url,
+      transaction_date: item.proofDate ?? item.transaction_date,
+      bank_reference: item.proofBankRef,
+      congregation_id: period.congregationId,
+      uploaded_by: period.capturedByUserId,
+    });
+    await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", lineServerId);
+    await db.lineItems.update(item.localId, { proof_status: "uploaded", proofBlob: null });
+  }
 }
 
-async function flushOverrideAudit(
-  supabase: ReturnType<typeof createClient>,
-  record: QueuedRecord
+async function syncDepositSlip(
+  supabase: SB,
+  periodServerId: string,
+  period: LocalPeriod,
+  items: LocalLineItem[]
 ): Promise<void> {
-  const { error } = await supabase.from("audit_log").insert({
-    user_id: record.capturedByUserId,
-    action_type: "SELF_REVIEW_EXCEPTION",
-    entity_type: (record.payload.entity_type as string) ?? "cashbook_service",
-    entity_id: record.serverId ?? null,
-    assumed_role: (record.payload.assumed_role as string) ?? null,
-    comment: (record.payload.comment as string) ?? null,
-    metadata: { flushed_at: new Date().toISOString(), offline_capture: true },
-  });
-  if (error) throw new Error(error.message);
+  if (!period.depositBlob) return;
+  const url = await uploadProof(
+    supabase,
+    period,
+    period.depositBlob,
+    period.depositFileName ?? "deposit-slip.jpg",
+    "deposit-slip"
+  );
+  const banked = items.filter((i) => i.item_type === "CashBanked");
+  for (const bi of banked) {
+    // Ensure the item exists server-side (it was upserted above -> has serverId).
+    const current = await db.lineItems.get(bi.localId);
+    const lineServerId = current?.serverId;
+    if (!lineServerId) continue;
+    await supabase.from("cashbook_attachment").insert({
+      line_item_id: lineServerId,
+      file_url: url,
+      transaction_date: period.depositDate,
+      bank_reference: period.depositBankRef,
+      congregation_id: period.congregationId,
+      uploaded_by: period.capturedByUserId,
+    });
+    await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", lineServerId);
+    await db.lineItems.update(bi.localId, { proof_status: "uploaded" });
+  }
+  await db.periods.update(period.localId, { depositBlob: null });
+  void periodServerId;
+}
+
+async function uploadProof(
+  supabase: SB,
+  period: LocalPeriod,
+  blob: Blob,
+  fileName: string,
+  suffix = "proof"
+): Promise<string> {
+  const ts = new Date().toISOString().replace(/[:T-]/g, "").slice(0, 14);
+  const ext = fileName.split(".").pop() ?? "jpg";
+  const path = `${period.congregationId}/${period.year}/${String(period.month).padStart(2, "0")}/${period.service}_${period.weekKey}/${period.capturedByUserId}/${ts}-${suffix}.${ext}`;
+  const { error } = await supabase.storage.from(PROOF_BUCKET).upload(path, blob);
+  if (error) throw new Error(`Proof upload failed: ${error.message}`);
+  return supabase.storage.from(PROOF_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
 async function persistConflictAudit(
-  supabase: ReturnType<typeof createClient>,
-  record: QueuedRecord,
-  serverStatus: ServiceStatus
+  supabase: SB,
+  period: LocalPeriod,
+  serverId: string,
+  serverStatus: PeriodStatus
 ): Promise<void> {
-  // Preserve an auditable record of the conflict; never overwrite server state (Req 14.6).
   await supabase.from("audit_log").insert({
-    user_id: record.capturedByUserId,
+    user_id: period.capturedByUserId,
     action_type: "CORRECTION",
-    entity_type: "cashbook_service",
-    entity_id: record.serverId,
-    comment: `Sync conflict: local status ${record.serviceStatus} is stale; server at ${serverStatus}.`,
-    metadata: { conflict: true, localId: record.localId, serverStatus },
+    entity_type: "cashbook_period",
+    entity_id: serverId,
+    comment: `Sync conflict: local status ${period.status} is stale; server at ${serverStatus}.`,
+    metadata: { conflict: true, localId: period.localId, serverStatus },
   });
 }
 
-async function markSynced(localId: string, serverId?: string): Promise<void> {
-  await db.captureQueue.update(localId, {
-    localStatus: "synced",
-    updatedAt: new Date().toISOString(),
-    ...(serverId ? { serverId } : {}),
-  });
-}
-
-async function recordFailure(record: QueuedRecord, message: string): Promise<void> {
-  await db.captureQueue.update(record.localId, {
+async function recordFailure(period: LocalPeriod, message: string): Promise<void> {
+  await db.periods.update(period.localId, {
     localStatus: "failed",
-    syncAttempts: record.syncAttempts + 1,
+    syncAttempts: period.syncAttempts + 1,
     lastError: message,
     updatedAt: new Date().toISOString(),
   });
-}
-
-/** Enqueue helper (mirrors design's Sync_Engine.enqueue). */
-export async function enqueue(record: QueuedRecord): Promise<void> {
-  await db.captureQueue.add(record);
 }

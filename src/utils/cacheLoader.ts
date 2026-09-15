@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// REFERENCE CACHE LOADER — populates the offline lookup stores.
-// Runs only during an active ONLINE session. Fetches officers, congregations, and
-// hierarchy levels from Supabase (RLS scopes rows to the user) and mirrors them into
-// the Dexie Local_Store so offline pickers are ready (Req 3.3, 11, 13.1, 13.2).
+// REFERENCE CACHE LOADER (v2) — hydrates offline lookups during an online session.
+// Populates officers (active, Priest/Underdeacon), congregations, hierarchy levels,
+// and congregation_settings (proof_mandatory) so offline capture pickers and the
+// proof-mandatory rule are ready (Req 1.4, 1.8, 2.5).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@/lib/supabase/client";
@@ -11,6 +11,7 @@ import {
   type CongregationLookup,
   type HierarchyLookup,
   type OfficerLookup,
+  type CongregationSettings,
 } from "@/db/schema";
 
 function isOnline(): boolean {
@@ -22,66 +23,81 @@ export interface RefreshResult {
   officers: number;
   congregations: number;
   hierarchyLevels: number;
+  congregationSettings: number;
   error?: string;
 }
 
-/**
- * Fetch reference data from Supabase and replace the local lookup stores.
- * No-op (ok:false) when offline. Each store is cleared then repopulated so removed
- * rows do not linger. Records the refresh timestamp in syncMeta.
- */
+/** Fetch reference data from Supabase and replace the local lookup stores. */
 export async function refreshReferenceCache(): Promise<RefreshResult> {
-  const empty: RefreshResult = { ok: false, officers: 0, congregations: 0, hierarchyLevels: 0 };
+  const empty: RefreshResult = {
+    ok: false,
+    officers: 0,
+    congregations: 0,
+    hierarchyLevels: 0,
+    congregationSettings: 0,
+  };
   if (!isOnline()) return { ...empty, error: "offline" };
 
   const supabase = createClient();
 
-  const [officersRes, congsRes, hierRes] = await Promise.all([
-    supabase.from("officers").select("id, congregation_id, officer_code, first_name, last_name, rank, is_active"),
-    supabase.from("congregations").select("id, name, code, overseership_id, eldership_id, apostleship_id, district_id"),
+  const [officersRes, congsRes, hierRes, settingsRes] = await Promise.all([
+    supabase
+      .from("officers")
+      .select("id, congregation_id, officer_code, first_name, last_name, rank, is_active")
+      .eq("is_active", true)
+      .in("rank", ["Priest", "Underdeacon"]),
+    supabase
+      .from("congregations")
+      .select("id, name, code, overseership_id, eldership_id, apostleship_id, district_id"),
     supabase.from("hierarchy_levels").select("id, name, code, level_type, parent_id"),
+    supabase.from("congregation_settings").select("congregation_id, proof_mandatory"),
   ]);
 
-  const firstError = officersRes.error ?? congsRes.error ?? hierRes.error;
-  if (firstError) {
-    return { ...empty, error: firstError.message };
-  }
+  const firstError = officersRes.error ?? congsRes.error ?? hierRes.error ?? settingsRes.error;
+  if (firstError) return { ...empty, error: firstError.message };
 
   const officers = (officersRes.data ?? []) as OfficerLookup[];
   const congregations = (congsRes.data ?? []) as CongregationLookup[];
   const hierarchyLevels = (hierRes.data ?? []) as HierarchyLookup[];
+  const congregationSettings = (settingsRes.data ?? []) as CongregationSettings[];
 
-  // Replace each store atomically so offline reads see a consistent snapshot.
-  await db.transaction("rw", db.officers, db.congregations, db.hierarchyLevels, db.syncMeta, async () => {
-    await db.officers.clear();
-    await db.officers.bulkPut(officers);
-    await db.congregations.clear();
-    await db.congregations.bulkPut(congregations);
-    await db.hierarchyLevels.clear();
-    await db.hierarchyLevels.bulkPut(hierarchyLevels);
+  await db.transaction(
+    "rw",
+    db.officers,
+    db.congregations,
+    db.hierarchyLevels,
+    db.congregationSettings,
+    db.syncMeta,
+    async () => {
+      await db.officers.clear();
+      await db.officers.bulkPut(officers);
+      await db.congregations.clear();
+      await db.congregations.bulkPut(congregations);
+      await db.hierarchyLevels.clear();
+      await db.hierarchyLevels.bulkPut(hierarchyLevels);
+      await db.congregationSettings.clear();
+      await db.congregationSettings.bulkPut(congregationSettings);
 
-    const meta = await db.syncMeta.get("global");
-    await db.syncMeta.put({
-      key: "global",
-      lastSyncAt: meta?.lastSyncAt ?? null,
-      lastReferenceRefreshAt: new Date().toISOString(),
-      schemaVersion: 1,
-    });
-  });
+      const meta = await db.syncMeta.get("global");
+      await db.syncMeta.put({
+        key: "global",
+        lastSyncAt: meta?.lastSyncAt ?? null,
+        lastReferenceRefreshAt: new Date().toISOString(),
+        schemaVersion: 2,
+      });
+    }
+  );
 
   return {
     ok: true,
     officers: officers.length,
     congregations: congregations.length,
     hierarchyLevels: hierarchyLevels.length,
+    congregationSettings: congregationSettings.length,
   };
 }
 
-/**
- * Fire-and-forget auto refresh for use during an active online session (login,
- * reconnect, app bootstrap). Never throws — failures are swallowed so they don't
- * block the UI; the last good cache remains usable offline.
- */
+/** Fire-and-forget auto refresh for an active online session. Never throws. */
 export function autoRefreshReferenceCache(): void {
   if (!isOnline()) return;
   void refreshReferenceCache().catch(() => {
