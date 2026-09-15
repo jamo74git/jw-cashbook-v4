@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
+import { AppHeader } from "@/components/AppHeader";
 
 /**
  * Online-only Head Office layout (/admin).
@@ -25,12 +26,7 @@ export default function AdminLayout() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-sm font-semibold">OAC Cashbook — Head Office</span>
-        <span className="text-[10px] rounded px-2 py-0.5 bg-green-100 text-green-700">
-          Online
-        </span>
-      </header>
+      <AppHeader />
       <main className="p-4">
         <Outlet />
       </main>
