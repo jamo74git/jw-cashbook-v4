@@ -28,8 +28,14 @@
     AND period.status = 'SubmittedForAudit'
 
 3.  Elder: 
-    can UPDATE status to 'SubmittedToHO' 
+    can UPDATE status to 'SubmittedToOverseer' 
     WHERE all weeks in month = 'AuditApproved' for that congregation
+    Logs MONTH_SUBMIT per congregation
+
+3b. Chairperson: 
+    can UPDATE status to 'SubmittedToOverseer' as fallback submitter
+    WHERE all weeks in month = 'AuditApproved' for that congregation
+    Same MONTH_SUBMIT contract, gated on month.submit_to_overseer
 
 4.  Secretary: 
     can SELECT from cashbook_period and cashbook_line_item 

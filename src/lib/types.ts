@@ -69,6 +69,7 @@ export const AUDIT_ACTION_TYPES = [
   "BULK_IMPORT",
   "CENSUS_UPDATE",
   "MONTH_SUBMIT",
+  "MONTH_SUBMIT_TO_HO",
   "CORRECTION",
   "UNLOCK",
 ] as const;

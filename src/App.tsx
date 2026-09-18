@@ -14,6 +14,17 @@ import { CapturePage } from "@/capture/CapturePage";
 import { AppShell } from "@/components/AppShell";
 import { AuditDashboard } from "@/audit/AuditDashboard";
 import { AuditReviewPage } from "@/audit/AuditReviewPage";
+import { ElderDashboard } from "@/elder/ElderDashboard";
+import { ChairpersonDashboard } from "@/chairperson/ChairpersonDashboard";
+import { OverseerReview } from "@/review/OverseerReview";
+import { HOReview } from "@/review/HOReview";
+import { HOAdminLayout } from "@/ho/HOAdminLayout";
+import { UsersScreen } from "@/ho/UsersScreen";
+import { OfficersScreen } from "@/ho/OfficersScreen";
+import { CongregationsScreen } from "@/ho/CongregationsScreen";
+import { HierarchyScreen } from "@/ho/HierarchyScreen";
+import { SecretaryReview } from "@/secretary/SecretaryReview";
+import { SettingsPage } from "@/settings/SettingsPage";
 
 // Code-split the two layout roots so an offline Capture load never pulls Admin code.
 const CaptureLayout = lazy(() => import("./capture/CaptureLayout"));
@@ -21,7 +32,7 @@ const AdminLayout = lazy(() => import("./admin/AdminLayout"));
 
 // Role dashboards not yet rebuilt in the Vite app; routed to a placeholder so users
 // land somewhere with a header + sign-out instead of bouncing back to /login.
-const ROLE_DASHBOARDS = ["/dashboard", "/treasurer", "/elder", "/chairperson", "/review", "/reports"];
+const ROLE_DASHBOARDS = ["/dashboard", "/treasurer", "/reports"];
 
 function Loading() {
   return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -59,8 +70,10 @@ function Protected({ area, children }: { area: "capture" | "admin" | "any"; chil
   return <>{children}</>;
 }
 
+/** /admin is superseded by the HO review portal at /ho. Redirect so the old
+ * placeholder never shows and any lingering /admin links land on the real screen. */
 function AdminHome() {
-  return <p className="text-sm text-muted-foreground">Head Office dashboard (online-only) — coming next.</p>;
+  return <Navigate to="/ho" replace />;
 }
 
 /** Content-only placeholder for role dashboards not yet ported. The header comes from
@@ -125,6 +138,28 @@ export function App() {
             {/* Auditor portal (online-only; in-page audit.view_queue gate). */}
             <Route path="/audit" element={<AuditDashboard />} />
             <Route path="/audit/:periodId" element={<AuditReviewPage />} />
+            {/* Elder portal (online-only; in-page month.submit_to_overseer gate). */}
+            <Route path="/elder" element={<ElderDashboard />} />
+            {/* Chairperson portal (online-only; fallback submitter, same gate). */}
+            <Route path="/chairperson" element={<ChairpersonDashboard />} />
+            {/* Overseer/Apostle review (online-only; in-page overseer.view gate).
+                Canonical /review (getDashboardRoute target) + /overseer alias. */}
+            <Route path="/review" element={<OverseerReview />} />
+            <Route path="/overseer" element={<OverseerReview />} />
+            {/* HO Admin: hamburger-sidebar layout. Dashboard (governance rollup) is the
+                index; User/Officer/Congregation/Hierarchy management are sidebar routes. */}
+            <Route path="/ho" element={<HOAdminLayout />}>
+              <Route index element={<HOReview />} />
+              <Route path="dashboard" element={<Navigate to="/ho" replace />} />
+              <Route path="users" element={<UsersScreen />} />
+              <Route path="officers" element={<OfficersScreen />} />
+              <Route path="congregations" element={<CongregationsScreen />} />
+              <Route path="hierarchy" element={<HierarchyScreen />} />
+            </Route>
+            {/* Secretary congregational finance (online-only; in-page secretary.view gate). */}
+            <Route path="/secretary" element={<SecretaryReview />} />
+            {/* Settings (any authenticated user) — theme + profile + sign out. */}
+            <Route path="/settings" element={<SettingsPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/login" replace />} />

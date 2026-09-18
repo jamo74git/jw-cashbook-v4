@@ -12,8 +12,8 @@ Note: Apostle oversees Overseerships. 3+ Apostleships = District
 - HO: CRUD users, congregations, officers. Read all.
 - Apostle: Read all in Apostleship + below.
 - Overseer: Read all in Overseership + below.
-- Elder: Read all in Eldership + below. Mobile "Submit to HO" per congregation.
-- Chairperson/Priest: Capture like Treasurer.
+- Elder: Read all in Eldership + below. Mobile "Submit to Overseer" per congregation.
+- Chairperson/Priest: Priest rank, subordinate to the Elder. Captures like Treasurer. Fallback submitter to Overseer when the Elder is tech-averse or unavailable (same month.submit_to_overseer contract).
 - Treasurer: Capture by Officer Code.
 - Auditor x2: Mobile approval at congregation. All-or-nothing.
 - Secretary: Read-only summary, no attachments. For monthly meeting.
@@ -23,7 +23,7 @@ Note: Apostle oversees Overseerships. 3+ Apostleships = District
 2.  Sequential Lock: Week N locked until Week N-1 = Audit Approved
 3.  Week Logic: Week1 starts on 2nd Sunday. Week1 can be in prev month.
 4.  Officers Capture: Members and Officers sections require officer_id dropdown
-5.  Status: Draft -> Submitted -> AuditApproved -> SubmittedToHO -> HOReviewed. AuditRejected returns to draft
+5.  Status: Draft -> Submitted -> AuditApproved -> SubmittedToOverseer -> OverseerApproved/OverseerRejected -> SubmittedToHO -> HOReviewed. AuditRejected returns to Draft
 6.  Banking: proof_status = Pending | Deposited
 7.  Mobile First: All roles can use mobile. Desktop enhances review.
 

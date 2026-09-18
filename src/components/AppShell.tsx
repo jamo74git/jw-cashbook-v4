@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { AppHeader } from "@/components/AppHeader";
+import { useTheme } from "@/lib/useTheme";
 
 /**
  * Shared authenticated shell. Renders the app header (with sign-out) once and hosts
@@ -11,6 +12,8 @@ import { AppHeader } from "@/components/AppHeader";
  * still reuse the <AppHeader/> component.
  */
 export function AppShell() {
+  // Apply the persisted theme (light/dark/system) across all authenticated pages.
+  useTheme();
   return (
     <div className="min-h-screen bg-background text-foreground">
       <AppHeader />

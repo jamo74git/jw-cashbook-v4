@@ -123,16 +123,61 @@ This document is requirements-only. Requirement 1 (Treasurer Capture Flow) is gr
 **Privileged backend**
 16. THE audit status changes SHALL be performed as direct RLS-gated Supabase updates (as in the original); NO new Edge Function is required for the auditor slice.
 
-### Requirement 6: Elder & Chairperson Dashboards
+### Requirement 6: Elder Portal (online-only) — grounded in f6145ff1
 
-**User Story:** As an Elder, I want the month-end submission flow; as a Chairperson, my governance view — so both roles function as before.
+**User Story:** As an Elder overseeing one or more congregations, I want a month-scoped governance dashboard that shows each congregation's capture/audit progress, a tithing review of priest and officer contributions, and a risk & audit log, so that I can review the eldership's month-end, drill into any week, and submit all audit-approved weeks up to the Overseer in one action.
 
 #### Acceptance Criteria
 
-1. THE Elder screen SHALL let the Elder select a congregation and, WHEN all weeks for the month are AuditApproved, present a "Submit to HO" action (status → SubmittedToHO).
-2. THE Elder/Chairperson SHALL be able to reach the capture view where historically permitted, with any `O` override logged as `SELF_REVIEW_EXCEPTION`.
-3. THE Chairperson screen SHALL restore its historical governance view.
-4. _Exact behavior SHALL be reconfirmed from `f6145ff1` during implementation._
+**Access & scope**
+1. THE Elder dashboard SHALL be **online-only** (read live from Supabase; no Dexie/offline path) and SHALL rely on Supabase RLS to scope data to the Elder's congregations.
+2. WHEN offline, THE Elder dashboard SHALL render an offline-unavailable state (consistent with the other online-only screens) rather than an empty or permission-denied view.
+3. ALL Elder access decisions (view/override) SHALL derive from `permissions.ts`, never from inline role checks.
+
+**Multi-congregation resolution**
+4. THE dashboard SHALL resolve the Elder's congregations from `user_congregation_assignments` (rows for the current user with `status = "active"`), joined to `congregations` (`id, name, code`) ordered by name.
+5. WHERE the Elder has no active `user_congregation_assignments` rows, THE dashboard SHALL fall back to the legacy eldership lookup: `congregations` where `eldership_id = access.hierarchy_id`.
+6. WHERE no congregations resolve, THE dashboard SHALL render an empty state and load no period data.
+
+**Month selector**
+7. THE dashboard SHALL default to the current month (`YYYY-MM`) and provide a month picker.
+8. THE month picker SHALL reject any future month (year/month after the current month), leaving the selection unchanged and surfacing a "Cannot select future period" notice.
+9. WHEN the selected month changes, THE dashboard SHALL reload all three tabs for that month.
+
+**Period & line-item aggregation (month-end contract)**
+10. FOR the selected month, THE dashboard SHALL load `cashbook_period` rows (`id, congregation_id, week, service, status, created_at`) where `congregation_id IN (resolved congregations)` AND `year =` selected year AND `month =` selected month.
+11. THE dashboard SHALL load `cashbook_line_item` rows (`id, period_id, section, is_officer, item_type, amount, officer_id, proof_status`) for those period ids, and active officers (`id, officer_code, congregation_id`) for the resolved congregations.
+12. THE expected week count SHALL be computed as OAC weeks for the month (Sundays in the month minus one, minimum one; Week 1 = 2nd Sunday), and captured weeks SHALL be the count of distinct `week` values present in that congregation's periods.
+13. Money aggregation SHALL classify amounts by `is_officer` and `item_type`: **cash** = `item_type IN (Cash, CashBanked, CashPending)`, **deposit/EFT** = `item_type IN (EFT, DirectDebit)`, plus `Burial` and `Expense` buckets — computed for Members (`is_officer = false`) and Officers (`is_officer = true`) separately.
+
+**Tab 1 — Governance**
+14. THE Governance tab SHALL show, per congregation: In Progress (`status IN (Draft, Rejected)`), Awaiting Audit (`status = Submitted`), Audit Approved (`status = AuditApproved`), Submitted to Overseer (`status IN (SubmittedToOverseer, OverseerApproved, OverseerRejected, SubmittedToHO, HOReviewed)` — i.e. handed up to the Overseer or beyond), Last Edit (latest `created_at`), and a Review action. _(Correction: the historical `elder/page.tsx` counted this column as `SubmittedToHO|HOReviewed`, which is wrong — it reflected the same submit bug fixed in criterion 18.)_
+15. THE Review action SHALL load that congregation's periods (`id, week, service, status`) for the month ordered by week and present a week list; selecting a week SHALL navigate into the existing capture screen at `/capture/:periodId`.
+16. THE Governance tab SHALL show a Submission Summary that, per congregation, presents a captured/total weeks badge and Members / Officers / Burial / Expenses money totals with a computed Total of `(membersCash + membersDeposit + officersCash + officersDeposit + burial) − expenses`, expandable to per-week, per-service rows.
+
+**Submit All Approved to Overseer**
+17. THE "Submit All Approved to Overseer" action SHALL require `hasPermission(role, "month.submit_to_overseer")` and SHALL be disabled unless **every** congregation row has `auditApproved > 0` AND `inProgress === 0` AND `awaitingAudit === 0` (i.e. nothing still in progress or awaiting audit, and at least one approved week per congregation).
+18. WHEN submitted, THE action SHALL update `cashbook_period` to `status = "SubmittedToOverseer"` (NOT `SubmittedToHO`) for rows where `congregation_id IN (resolved congregations)` AND the selected year/month AND `status = "AuditApproved"` (only approved weeks advance), and SHALL log a `MONTH_SUBMIT` entry to `audit_log` per submitted congregation-month, then reload. _(This adopts the authoritative `monthly-close/page.tsx` contract; the historical `elder/page.tsx` wrote `SubmittedToHO` with no audit log, which incorrectly skipped the Overseer stage.)_
+18a. THE Elder SHALL submit only up to the **Overseer**. Advancing a month to `SubmittedToHO` is the **Overseer's** responsibility (the Overseer is accountable at HO and consolidates multiple congregations); the Elder Portal SHALL NOT write `SubmittedToHO`, `OverseerApproved`, or `HOReviewed`.
+
+**Tab 2 — Tithing Review (priest/officer)**
+19. THE Tithing Review tab SHALL present, per congregation, per active officer (priest): members cash, members deposit/EFT, priestship total, officers cash, officers deposit/EFT, and officer total, with congregation subtotals and percentage splits, expandable per officer.
+20. THE tab SHALL compute a Cash Risk highlight of the top-3 priestships by cash amount, each with its percentage of the eldership total and percentage of total cash, plus eldership Total Cash / Total EFT-Debit / grand total with cash-vs-EFT percentage split.
+
+**Tab 3 — Risk & Audit**
+21. THE Risk & Audit tab SHALL list up to the 20 most recent `audit_log` rows (`user_id, action_type, entity_id, comment, created_at`) where `entity_id IN (month period ids)`, ordered by `created_at` descending, resolving each actor to their role via `user_hierarchy_access` (`status = active`) and each period to its congregation/week label.
+22. WHERE no `audit_log` rows exist for the month, THE tab SHALL fall back to deriving entries from non-Draft period status transitions.
+
+**Override reuse of capture & audit**
+23. THE Elder SHALL reach the existing `/capture/:periodId` (and, where the Elder audits, `/audit/:periodId`) screens via the Elder's Override (`O`) permissions rather than a rebuilt Elder-specific editor.
+24. IF the Elder acts on a period via an Override (`O`) permission on the capture or audit screens, THEN the system SHALL log a `SELF_REVIEW_EXCEPTION` to `audit_log` (per Req 1.17 and Req 5.13) — the shared capture/audit override mechanism is the single source of that logging; the Elder Portal SHALL NOT duplicate or bypass it.
+
+**Status vocabulary (data note)**
+25. THE Elder Portal SHALL treat `cashbook_period.status` as the **extended** server vocabulary defined by `SERVICE_STATUSES` in `f6145ff1` `src/lib/types.ts` — `Draft, PendingAudit, AuditApproved, AuditRejected, SubmittedToOverseer, OverseerApproved, OverseerRejected, SubmittedToHO, HOReviewed` — but SHALL itself only ever **write** `SubmittedToOverseer` (via the submit action). The offline `PeriodStatus` type (`Draft | Rejected | Submitted | AuditApproved` in `src/db/schema.ts`) is a **capture-stage subset**; the extended states are online-only and SHALL NOT be forced through the Dexie/offline layer. _(Flagged: keep this documented so the offline type is not mistaken for the full status set, and so `SubmittedToOverseer`/overseer-and-beyond states are recognized on read.)_
+
+**Chairperson (forward note)**
+26. THE Chairperson governance dashboard SHALL be authored as its own requirement in the next slice, reusing the same `/capture` + `/audit` override wiring and `SELF_REVIEW_EXCEPTION` logging defined here; only its dashboard aggregation differs.
+27. _Elder aggregation math and query shapes above are grounded in `f6145ff1` `elder/page.tsx`; any divergence discovered during implementation SHALL be reconfirmed against that source._
 
 ### Requirement 7: Overseer/Apostle Review (online-only)
 
@@ -186,7 +231,8 @@ This document is requirements-only. Requirement 1 (Treasurer Capture Flow) is gr
 2. ALL admin management SHALL be HO-only (`M`), enforced by the permission matrix client-side and by the `admin-write` gate server-side.
 3. HO data SHALL be district-segregated via `ho_district_assignments`, with RLS filtering.
 4. Privileged writes SHALL route through the `admin-write` Edge Function (never a client-side service-role key).
-5. _Exact layout and fields SHALL be reconfirmed from `f6145ff1` admin pages during implementation._
+5. THE HO review portal (`/ho`) SHALL present a district-segregated consolidated rollup (Overseership → Eldership → Congregation → Week → Service) for the HO's assigned districts, and SHALL let HO advance `SubmittedToHO → HOReviewed` (approve-only, with an optional review comment), gated on `ho.review`, using an optimistic lock (`status = "SubmittedToHO"`), logging `HO_REVIEW`. `HOReviewed` is terminal; there SHALL be no HO reject branch.
+6. _Exact layout and fields SHALL be reconfirmed from `f6145ff1` admin pages during implementation._
 
 ### Requirement 12: Shared Shell, Settings, and Legacy Removal
 

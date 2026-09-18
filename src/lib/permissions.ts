@@ -49,10 +49,23 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
 
   // ── Monthly Close ───────────────────────────────────────────────────────
   "month.view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "V", Secretary: "V" },
-  "month.submit_to_overseer": { HO: "-", Apostle: "-", Overseer: "-", Elder: "S", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+  // Elder = "S" (authoritative submitter). Chairperson = "O" (fallback override submitter
+  // when the Elder is unavailable/tech-averse; the "O" ensures the submit logs a
+  // SELF_REVIEW_EXCEPTION per the audited-override invariant).
+  "month.submit_to_overseer": { HO: "-", Apostle: "-", Overseer: "-", Elder: "S", Chairperson: "O", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "month.overseer_approve": { HO: "-", Apostle: "-", Overseer: "A", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "month.overseer_reject": { HO: "-", Apostle: "-", Overseer: "A", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "month.submit_to_ho": { HO: "-", Apostle: "-", Overseer: "S", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+
+  // ── Overseer / Apostle Review (consolidated hierarchy review; matches /review access) ──
+  "overseer.view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+
+  // ── HO / Apostle top-level consolidated review (HO remains district-segregated) ──
+  "ho.view": { HO: "V", Apostle: "V", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+  // HO final review-approval: SubmittedToHO -> HOReviewed (approve-only, terminal).
+  "ho.review": { HO: "A", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+  // Secretary congregational finance review (read-only consolidated; HO/Apostle may view any congregation).
+  "secretary.view": { HO: "V", Apostle: "V", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "V" },
 
   // ── Corrections ─────────────────────────────────────────────────────────
   "corrections.raise": { HO: "A", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
@@ -72,6 +85,7 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "admin.manage_officers": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "admin.bulk_import": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "admin.audit_logs": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+  "admin.manage_hierarchy": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
 
   // ── Reports ─────────────────────────────────────────────────────────────
   "reports.export_pdf": { HO: "X", Apostle: "X", Overseer: "X", Elder: "X", Chairperson: "X", Auditor: "-", Treasurer: "-", Secretary: "X" },
@@ -151,7 +165,7 @@ export function isOverrideAction(role: Role, moduleFunction: string): boolean {
 export function getDashboardRoute(role: Role): string {
   switch (role) {
     case "HO":
-      return "/admin";
+      return "/ho";
     case "Apostle":
     case "Overseer":
       return "/review";
@@ -164,7 +178,7 @@ export function getDashboardRoute(role: Role): string {
     case "Auditor":
       return "/audit";
     case "Secretary":
-      return "/reports";
+      return "/secretary";
     default:
       return "/dashboard";
   }
