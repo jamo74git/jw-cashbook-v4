@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { hasPermission, isOverrideAction, logSelfReviewException } from "@/lib/permissions";
+import { createClient } from "@/lib/supabase/client";
+import { useOnlineStatus } from "@/lib/useOnlineStatus";
+import { db } from "@/db/schema";
 import * as capture from "@/db/captureRepo";
 import type { TabKey } from "@/db/captureRepo";
 import {
@@ -51,11 +54,69 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
   const [txnDate, setTxnDate] = useState("");
   const [bankRef, setBankRef] = useState("");
 
+  // Interim officer request (online-only insert; usable in capture immediately).
+  const online = useOnlineStatus();
+  const [addedInterim, setAddedInterim] = useState<OfficerLookup[]>([]);
+  const [showInterim, setShowInterim] = useState(false);
+  const [iFirst, setIFirst] = useState("");
+  const [iLast, setILast] = useState("");
+  const [iInitials, setIInitials] = useState("");
+  const [iRank, setIRank] = useState("Priest");
+  const [iReason, setIReason] = useState("");
+  const [iSaving, setISaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
   const editable = capture.isPeriodEditable(period);
   const canEdit = hasPermission(role, "capture.edit") && editable;
   const canSubmit = hasPermission(role, "capture.submit") && editable;
+  const canRequestInterim = hasPermission(role, "officer.interim_add");
 
-  const priests = useMemo(() => officers.filter((o) => o.rank === "Priest"), [officers]);
+  // Cached officers plus any interim officers requested this session.
+  const allOfficers = useMemo(() => {
+    const seen = new Set(officers.map((o) => o.id));
+    return [...officers, ...addedInterim.filter((o) => !seen.has(o.id))];
+  }, [officers, addedInterim]);
+  const priests = useMemo(() => allOfficers.filter((o) => o.rank === "Priest"), [allOfficers]);
+
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3500); return () => clearTimeout(t); }, [toast]);
+
+  async function submitInterim() {
+    if (!iLast.trim()) return setError("Surname is required");
+    setISaving(true);
+    setError(null);
+    const supabase = createClient();
+    const officer_code = `INT-${Date.now().toString().slice(-6)}`;
+    const initials = iInitials.trim() || `${iFirst.trim() ? iFirst.trim()[0].toUpperCase() + "." : ""}${iLast.trim() ? iLast.trim()[0].toUpperCase() + "." : ""}`;
+    // pending_ho_approval + is_interim + request metadata. NOTE: requires these columns
+    // on `officers` (or a metadata JSONB) to persist at runtime.
+    const { data, error: e } = await supabase
+      .from("officers")
+      .insert({
+        officer_code,
+        first_name: iFirst.trim() || iLast.trim(),
+        last_name: iLast.trim(),
+        initials,
+        rank: iRank,
+        congregation_id: period.congregationId,
+        is_active: true,
+        is_interim: true,
+        status: "pending_ho_approval",
+        requested_by: period.congregationId,
+        request_reason: iReason.trim() || null,
+        requested_at: new Date().toISOString(),
+      })
+      .select("id, congregation_id, officer_code, first_name, last_name, rank, is_active")
+      .single();
+    setISaving(false);
+    if (e || !data) { setError(e?.message ?? "Failed to request interim officer"); return; }
+    const created: OfficerLookup = { ...(data as OfficerLookup), initials, is_interim: true, status: "pending_ho_approval" };
+    setAddedInterim((prev) => [...prev, created]);
+    void db.officers.put(created).catch(() => {}); // cache locally so it persists for capture
+    setOfficerId(created.id);
+    setShowInterim(false);
+    setIFirst(""); setILast(""); setIInitials(""); setIRank("Priest"); setIReason("");
+    setToast(`Interim officer ${created.officer_code} requested — pending HO approval.`);
+  }
 
   const reload = useCallback(async () => {
     setItems(await capture.getLineItems(period.localId));
@@ -179,11 +240,40 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
   }
 
   const officerLabel = (o: OfficerLookup) =>
-    `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}`;
-  const pickerOfficers = activeTab === "Members" ? priests : officers;
+    `${o.officer_code} - ${o.first_name}${o.last_name ? " " + o.last_name : ""}${o.is_interim ? " * (Pending HO)" : ""}`;
+  const pickerOfficers = activeTab === "Members" ? priests : allOfficers;
 
   return (
     <div className="grid gap-3 md:grid-cols-[1fr_260px]">
+      {toast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-primary text-primary-foreground px-4 py-2 rounded-md text-xs shadow-lg">
+          {toast}
+        </div>
+      )}
+
+      {showInterim && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowInterim(false)}>
+          <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Request Interim Officer</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-[11px] text-muted-foreground">Usable in this cashbook immediately; marked <b>Pending HO</b> until Head Office approves.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1"><Label className="text-xs">Surname *</Label><Input className="h-8 text-xs" value={iLast} onChange={(e) => setILast(e.target.value)} /></div>
+                <div className="space-y-1"><Label className="text-xs">First Name</Label><Input className="h-8 text-xs" value={iFirst} onChange={(e) => setIFirst(e.target.value)} /></div>
+                <div className="space-y-1"><Label className="text-xs">Initials</Label><Input className="h-8 text-xs" placeholder="auto" value={iInitials} onChange={(e) => setIInitials(e.target.value)} /></div>
+                <div className="space-y-1"><Label className="text-xs">Rank *</Label><select className="h-8 w-full rounded border border-input bg-background px-2 text-xs" value={iRank} onChange={(e) => setIRank(e.target.value)}><option value="Priest">Priest</option><option value="Underdeacon">Underdeacon</option></select></div>
+              </div>
+              <div className="space-y-1"><Label className="text-xs">Reason</Label><textarea className="w-full rounded border border-input bg-background px-2 py-1 text-xs" rows={2} value={iReason} onChange={(e) => setIReason(e.target.value)} placeholder="Why is this interim officer needed?" /></div>
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <div className="flex gap-2 justify-end">
+                <Button size="sm" variant="outline" onClick={() => setShowInterim(false)}>Cancel</Button>
+                <Button size="sm" onClick={() => void submitInterim()} disabled={iSaving || !online}>{iSaving ? "Requesting…" : "Submit Request"}</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="min-w-0 space-y-3">
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto pb-1">
@@ -217,6 +307,19 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
                     </option>
                   ))}
                 </select>
+              )}
+              {(activeTab === "Members" || activeTab === "Officers") && canRequestInterim && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-9 text-[11px]"
+                  disabled={!online}
+                  title={online ? "Request a new officer (pending HO approval)" : "Connect to request an interim officer"}
+                  onClick={() => setShowInterim(true)}
+                >
+                  + Request Interim Officer
+                </Button>
               )}
               {(activeTab === "Members" || activeTab === "Officers") && (
                 <select

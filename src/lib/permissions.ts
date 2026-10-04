@@ -42,6 +42,11 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "expenses.create": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "C", Auditor: "-", Treasurer: "C", Secretary: "-" },
   "expenses.approve_over_500": { HO: "-", Apostle: "-", Overseer: "-", Elder: "A", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
 
+  // ── Interim Officer request flow ─────────────────────────────────────────
+  // Field roles may request an interim officer (usable immediately, pending HO approval).
+  "officer.interim_add": { HO: "V", Apostle: "-", Overseer: "A", Elder: "-", Chairperson: "A", Auditor: "-", Treasurer: "A", Secretary: "-" },
+  "ho.interim_approve": { HO: "A", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
+
   // ── Audit ───────────────────────────────────────────────────────────────
   "audit.view_queue": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "-", Secretary: "-" },
   "audit.approve": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "O", Auditor: "A", Treasurer: "-", Secretary: "-" },

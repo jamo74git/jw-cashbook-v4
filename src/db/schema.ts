@@ -70,6 +70,10 @@ export interface OfficerLookup {
   last_name: string | null;
   rank: string; // "Priest" | "Underdeacon" | ...
   is_active: boolean;
+  initials?: string | null;
+  // Interim officer request flow (pending HO approval). Usable in capture immediately.
+  is_interim?: boolean;
+  status?: string | null; // e.g. "pending_ho_approval"
 }
 
 export interface CongregationSettings {
