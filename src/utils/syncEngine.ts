@@ -181,8 +181,8 @@ async function syncLineItem(
       congregation_id: period.congregationId,
       uploaded_by: period.capturedByUserId,
     });
-    await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", lineServerId);
-    await db.lineItems.update(item.localId, { proof_status: "uploaded", proofBlob: null });
+    await supabase.from("cashbook_line_item").update({ proof_status: "Deposited" }).eq("id", lineServerId);
+    await db.lineItems.update(item.localId, { proof_status: "Deposited", proofBlob: null });
   }
 }
 
@@ -214,8 +214,8 @@ async function syncDepositSlip(
       congregation_id: period.congregationId,
       uploaded_by: period.capturedByUserId,
     });
-    await supabase.from("cashbook_line_item").update({ proof_status: "uploaded" }).eq("id", lineServerId);
-    await db.lineItems.update(bi.localId, { proof_status: "uploaded" });
+    await supabase.from("cashbook_line_item").update({ proof_status: "Deposited" }).eq("id", lineServerId);
+    await db.lineItems.update(bi.localId, { proof_status: "Deposited" });
   }
   await db.periods.update(period.localId, { depositBlob: null });
   void periodServerId;

@@ -31,14 +31,13 @@ export type HierarchyLevel = (typeof HIERARCHY_LEVELS)[number];
 
 // ─── Status Flows ───────────────────────────────────────────────────────────
 
+// Real cashbook_period.status enum (generated from project cwdyixafvylzgtpsfmwr).
 export const SERVICE_STATUSES = [
   "Draft",
-  "PendingAudit",
+  "Submitted",
   "AuditApproved",
-  "AuditRejected",
   "SubmittedToOverseer",
-  "OverseerApproved",
-  "OverseerRejected",
+  "Rejected",
   "SubmittedToHO",
   "HOReviewed",
 ] as const;
@@ -54,7 +53,8 @@ export type IncomeType = (typeof INCOME_TYPES)[number];
 export const LINE_SECTIONS = ["Members", "Officers", "Burial", "Expenses"] as const;
 export type LineSection = (typeof LINE_SECTIONS)[number];
 
-export const PROOF_STATUSES = ["Pending", "Uploaded", "Deposited"] as const;
+// Real cashbook proof-status enum (generated from project cwdyixafvylzgtpsfmwr).
+export const PROOF_STATUSES = ["Pending", "Deposited", "NA"] as const;
 export type ProofStatus = (typeof PROOF_STATUSES)[number];
 
 export const AUDIT_ACTION_TYPES = [
@@ -132,37 +132,42 @@ export interface HODistrictAssignment {
   assigned_by: string | null;
 }
 
-export interface CashbookService {
+// Mirrors the real `cashbook_period` table (generated from cwdyixafvylzgtpsfmwr).
+export interface CashbookPeriod {
   id: string;
   congregation_id: string;
   year: number;
   month: number;
   week: number;
-  service_type: ServiceType;
-  service_date: string;
+  week_key: string | null;
+  service: string;
   status: ServiceStatus;
-  captured_by: string | null;
   submitted_at: string | null;
-  locked_at: string | null;
+  submitted_by: string | null;
   requestor_comment: string | null;
   elder_approval_comment: string | null;
-  expenses_total: number;
+  audit_comment: string | null;
+  expenses_total: number | null;
+  created_at: string | null;
 }
 
+// Mirrors the real `cashbook_line_item` table (generated from cwdyixafvylzgtpsfmwr).
 export interface CashbookLineItem {
   id: string;
-  service_id: string;
+  period_id: string;
   section: LineSection;
+  is_officer: boolean;
   officer_id: string | null;
-  officer_code: string | null;
-  income_type: IncomeType | null;
+  item_type: string;
+  payment_type: string | null;
   amount: number;
   item_count: number | null;
   manual_reference: string | null;
+  receipt_number: string | null;
+  transaction_date: string;
   proof_status: ProofStatus | null;
-  proof_image_url: string | null;
-  expense_date: string | null;
-  expense_description: string | null;
+  proof_reference: string | null;
+  approved: boolean | null;
 }
 
 export interface Banking {

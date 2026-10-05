@@ -29,3 +29,6 @@ Thumbs.db
 
 # vercel
 .vercel
+
+# Kiro MCP config (may contain secrets / tokens)
+.kiro/settings/mcp.json
