@@ -420,6 +420,27 @@ Sync_Engine behaviour/semantics.
   onward applied via `apply_migration` where the statements are non-destructive; any task with
   `DROP`/`REVOKE` may need the same SQL-editor fallback.
 
+## Carry-forward (next session — not Phase A scope)
+
+- **Offline PIN bug (NEW — needs fix):** the app prompts for a PIN while offline even when no PIN
+  was ever set, because the PIN is only established on the first **online** login. Fix: when no
+  PIN credential is stored (no Cached_Credential in Dexie), the offline unlock screen must NOT ask
+  for a PIN — instead show a "log in online first" message/route. Relates to `authService`
+  offline-unlock / `activateOffline` lifecycle. Candidate for its own bugfix spec.
+- **Migration-history gaps:** Task 3 (cashbook RLS) and Task 6's duplicate-index drop were applied
+  via the Supabase SQL editor (the destructive-statement confirmation would not surface through
+  `apply_migration`), so they have **no entry in Supabase migration history**. Reconcile if clean
+  history is required. Tasks 1, 2, 4, 5, and Task 6's 26 index creates ARE in history.
+- **`user_role` enum drift:** DB enum is `HO/Apostle/Overseer/Elder/Chairperson/Priest/Treasurer/
+  Auditor/Secretary` — it has `Priest` and lacks `SUPER_ADMIN`. Task 10/B1 must
+  `ALTER TYPE public.user_role ADD VALUE 'SUPER_ADMIN'` (and decide on `Priest`) before any
+  SUPER_ADMIN work. `get_my_role()`'s privilege-rank CASE already ranks `SUPER_ADMIN`=9, but no
+  such enum value/rows exist yet.
+- **`get_week_number`** has a mutable `search_path` (security advisor WARN) — outside A5's
+  four-function scope; optional one-line pin in a later hardening pass.
+- **Git:** Phase A Tasks 1–6 to be pushed by the user tonight (commit message "Phase A Tasks 1-6
+  complete"). Task 8 (types/sync) and Task 7 (blocked) not included in that commit.
+
 ## Task Dependency Graph
 
 ```json
