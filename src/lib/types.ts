@@ -46,9 +46,9 @@ export type ServiceStatus = (typeof SERVICE_STATUSES)[number];
 
 export const SERVICE_TYPES = ["AM", "PM"] as const;
 export type ServiceType = (typeof SERVICE_TYPES)[number];
-
-export const INCOME_TYPES = ["Cash", "EFT", "DirectDebit"] as const;
-export type IncomeType = (typeof INCOME_TYPES)[number];
+// NOTE: there is no fictional `income_type` column on the real schema — payment_type
+// (EFT | DirectDebit | Cash) is the real field. The old INCOME_TYPES enum was deleted
+// as part of the drift realignment (A8).
 
 export const LINE_SECTIONS = ["Members", "Officers", "Burial", "Expenses"] as const;
 export type LineSection = (typeof LINE_SECTIONS)[number];
@@ -170,15 +170,9 @@ export interface CashbookLineItem {
   approved: boolean | null;
 }
 
-export interface Banking {
-  id: string;
-  service_id: string;
-  payment_date: string;
-  payment_type: string;
-  amount: number;
-  proof_status: ProofStatus;
-  proof_image_url: string | null;
-}
+// DELETED (A8 drift realignment): the fictional `Banking` interface declared
+// `service_id` / `proof_image_url`, neither of which exist. There is no `banking`
+// table; proof lives on `cashbook_attachment.file_url`.
 
 export interface PriestCensus {
   id: string;
@@ -230,40 +224,12 @@ export const PERMISSION_CODES = {
 export type PermissionCode = (typeof PERMISSION_CODES)[keyof typeof PERMISSION_CODES];
 
 // ─── View Interfaces (for reporting) ────────────────────────────────────────
-
-export interface VCashbookService {
-  service_id: string;
-  congregation_id: string;
-  congregation_name: string;
-  congregation_code: string;
-  year: number;
-  month: number;
-  week: number;
-  service_type: ServiceType;
-  service_date: string;
-  status: ServiceStatus;
-  total_income: number;
-  total_expenses: number;
-  banked: number;
-  members_total: number;
-  officers_total: number;
-  burial_total: number;
-}
-
-export interface VCashbookMonth {
-  congregation_id: string;
-  congregation_name: string;
-  congregation_code: string;
-  year: number;
-  month: number;
-  service_count: number;
-  approved_count: number;
-  all_approved: boolean;
-  month_income: number;
-  month_expenses: number;
-  month_members: number;
-  month_officers: number;
-}
+//
+// DELETED (A8 drift realignment): the fictional reporting views `VCashbookService`
+// (declared `service_id` / `service_type` / `service_date`) and `VCashbookMonth`.
+// Neither `v_cashbook_service` nor `v_cashbook_month` exists — the real reporting
+// view is `v_congregation_month_status`. Reporting references the real
+// `CashbookPeriod` grain instead.
 
 export interface VCensusHealth {
   congregation_id: string;

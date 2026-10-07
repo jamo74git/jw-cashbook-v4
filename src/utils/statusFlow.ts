@@ -1,24 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVICE_STATUS_FLOW — directional transition validator (Req 14.4, 14.5, 14.7)
-// Draft -> PendingAudit -> AuditApproved|AuditRejected -> SubmittedToOverseer ->
-// OverseerApproved|OverseerRejected -> SubmittedToHO -> HOReviewed
+// Realigned (A8) to the REAL cashbook_period.status 7-value vocabulary:
+//   Draft -> Submitted -> AuditApproved -> SubmittedToOverseer -> SubmittedToHO
+//        -> HOReviewed, with a single `Rejected` state (returns to Draft).
 // Only HO may raise corrections / unlock a month.
 // Pure logic — no I/O — so it is directly unit/property testable (design Property 4, 11).
+// NOTE: not imported by the Sync_Engine (which keeps its own PeriodStatus rank over the
+// Dexie local vocabulary); realigning it here changes no sync behaviour.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Role, ServiceStatus } from "@/lib/types";
 
 /** Permitted successors for each status. */
 const SUCCESSORS: Record<ServiceStatus, ServiceStatus[]> = {
-  Draft: ["PendingAudit"],
-  PendingAudit: ["AuditApproved", "AuditRejected"],
+  Draft: ["Submitted"],
+  Submitted: ["AuditApproved", "Rejected"], // audit approves or rejects
   AuditApproved: ["SubmittedToOverseer"],
-  AuditRejected: ["Draft"], // rejected work returns to draft for correction
-  SubmittedToOverseer: ["OverseerApproved", "OverseerRejected"],
-  OverseerApproved: ["SubmittedToHO"],
-  OverseerRejected: ["Draft"],
-  SubmittedToHO: ["HOReviewed"],
+  SubmittedToOverseer: ["SubmittedToHO", "Rejected"], // overseer approves or rejects
+  SubmittedToHO: ["HOReviewed", "Rejected"], // HO reviews or rejects
   HOReviewed: [],
+  Rejected: ["Draft"], // rejected work returns to draft for correction
 };
 
 /** Actions that only HO may perform (corrections / unlock). */
@@ -59,16 +60,13 @@ export function isDownstreamOf(candidate: ServiceStatus, reference: ServiceStatu
 export function statusRank(status: ServiceStatus): number {
   const ORDER: ServiceStatus[] = [
     "Draft",
-    "PendingAudit",
+    "Submitted",
     "AuditApproved",
     "SubmittedToOverseer",
-    "OverseerApproved",
     "SubmittedToHO",
     "HOReviewed",
   ];
-  const i = ORDER.indexOf(status);
-  // Rejected states sit alongside their submission stage.
-  if (status === "AuditRejected") return ORDER.indexOf("PendingAudit");
-  if (status === "OverseerRejected") return ORDER.indexOf("SubmittedToOverseer");
-  return i;
+  // The single Rejected state returns to Draft; rank it alongside Draft.
+  if (status === "Rejected") return ORDER.indexOf("Draft");
+  return ORDER.indexOf(status);
 }
