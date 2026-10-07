@@ -150,7 +150,7 @@ Sync_Engine behaviour/semantics.
     `auth_leaked_password_protection` will persist until it is enabled on Pro.
   - _Requirements: 10.1 (deferred — infra/plan dependency, not a code gap)_
 
-- [ ] 8. Realign `src/lib/types.ts` and correct the Sync_Engine proof literal (A8)
+- [x] 8. Realign `src/lib/types.ts` and correct the Sync_Engine proof literal (A8)
   - [ ] 8.1 Realign `src/lib/types.ts` to the real schema
     - Define `SERVICE_STATUSES` / `ServiceStatus` as exactly the seven real values
       (`Draft`, `Submitted`, `AuditApproved`, `SubmittedToOverseer`, `Rejected`,
