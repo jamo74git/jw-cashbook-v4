@@ -35,7 +35,7 @@ interface CashbookFormProps {
 
 const money = (n: number) => `R${n.toFixed(2)}`;
 const needsProof = (i: LocalLineItem) => ["EFT", "DirectDebit", "Burial", "Expense"].includes(i.item_type);
-const hasProofLocally = (i: LocalLineItem) => i.proof_status === "uploaded" || !!i.proofBlob;
+const hasProofLocally = (i: LocalLineItem) => i.proof_status === "Deposited" || i.proof_status === "Pending" || !!i.proofBlob;
 
 export function CashbookForm({ period, role, officers, proofMandatory, onChanged }: CashbookFormProps) {
   const [items, setItems] = useState<LocalLineItem[]>([]);
@@ -387,7 +387,7 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
               {needsProof(item) &&
                 (hasProofLocally(item) ? (
                   <span className="text-[10px] text-green-600">
-                    {item.proof_status === "uploaded" ? "Uploaded" : "Saved"}
+                    {item.proof_status === "Deposited" ? "Deposited" : "Saved"}
                   </span>
                 ) : (
                   <button
