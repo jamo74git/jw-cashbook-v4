@@ -1,0 +1,243 @@
+{
+  "pbtResults": {
+    "2. Write preservation property tests (BEFORE implementing the fix)": {
+      "status": "passed",
+      "lastRunTimestamp": 1791496667486
+    },
+    "1. Write bug condition exploration tests (BEFORE implementing the fix)": {
+      "status": "passed",
+      "failingExample": "All 6 exploration tests FAILED on the UNFIXED code — this is the intended outcome; each failure is a reproducible counterexample proving a defect (A/B/C/D). Suite: src/features/auth/offlinePinFlow.explore.test.tsx (6 failed / 6).\n\n1) D-suppress-setup (Req 1.5, 1.7): seed credential for userB, drive handleAuthenticated for userA (no own credential), online. Expected pin-setup for userA. Counterexample: LoginPage navigated to \"/treasurer\" (dashboard) and PinSetup was never shown — a different user's credential (global db.credentials.count() > 0) suppressed setup. (\"Unable to find text /Set an offline PIN/i\"; rendered <div data-testid=navigated-to>/treasurer</div>.)\n\n2) D-wrong-unlock (Req 1.6, 1.7): seed userB (pin 1111) then userA (pin 2222); toArray()[0] === userB confirmed; call unlockOffline(\"2222\") with NO userId. Expected ok:true with session.userId === userA. Counterexample: res.ok === false — unlockOffline validated userA's PIN against userB's hash (the first/arbitrary record).\n\n3) D-offline-prompt (Req 1.6): seed userB only, open offline intending userA. Expected online-required (no PIN prompt). Counterexample: PinUnlock rendered — <p>Enter your PIN to unlock offline capture.</p> (pin-unlock bound to userB via global count()).\n\n4) A-skip (Req 1.1, 1.4): first online login (empty store), userA, press Skip. Expected a usable credential persisted (no offline dead-end). Counterexample: db.credentials.get(userA) === undefined — Skip calls onDone() without activateOffline, so nothing is persisted.\n\n5) B-offline-deadend (Req 1.2): offline, empty store. Expected online-required screen, no password form. Counterexample: the password form rendered (<div data-testid=password-form/>) — (!online && count===0) routes to an unusable password form with no \"go online\" guidance.\n\n6) C-no-refresh (Req 1.3): seed userA credential with stale role Treasurer; online login as userA with new server role Elder. Expected cached role refreshed to Elder (HMAC binding preserved). Counterexample: db.credentials.get(userA).role === \"Treasurer\" (unchanged) — handleAuthenticated navigates to /elder without refreshing the cached credential.\n\nHarness: Vitest 2.1.9 on jsdom (per-file docblock); Dexie on fake-indexeddb; WebCrypto under Node v24; LoginForm stubbed to drive the real onAuthenticated handoff; cacheLoader stubbed (no network); real crypto + authService.unlockOffline exercised. Duration ~4.3s.",
+      "lastRunTimestamp": 1791496823605
+    },
+    "9.1 Confirm the bug condition exploration tests now pass": {
+      "status": "passed",
+      "lastRunTimestamp": 1791500020105
+    },
+    "9.2 Confirm the preservation tests still pass": {
+      "status": "passed",
+      "lastRunTimestamp": 1791499841664
+    }
+  },
+  "executionHistory": {
+    "3. Extend the Dexie schema with per-user pointer and staged-refresh fields": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004250
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497003368
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497339573
+      }
+    ],
+    "4. Plumb `userId` and the access window through `AuthenticatedContext`": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004462
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497356440
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497566399
+      }
+    ],
+    "5.1 Target the resolved user in `unlockOffline(pin, userId?)` and commit staged refresh": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004549
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497609198
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791497999000
+      }
+    ],
+    "5.2 Add `stageCredentialRefresh(userId, { role, accessStartDate, accessEndDate })`": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004632
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498004576
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498241463
+      }
+    ],
+    "5.3 Set `lastActiveUserId` on successful `activateOffline`": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004713
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498246437
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498489623
+      }
+    ],
+    "6. Preserve `lastActiveUserId` on the reference-cache write": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004799
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498511133
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498668218
+      }
+    ],
+    "7. Add the accessible \"online-required\" screen": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496004911
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498672640
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498892902
+      }
+    ],
+    "8. Rework `LoginPage` orchestration to the per-user mode state machine": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496005005
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498898711
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791499295729
+      }
+    ],
+    "10. Checkpoint — build, typecheck, and confirm untouched files": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496005087
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500085908
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500377413
+      }
+    ],
+    "1. Write bug condition exploration tests (BEFORE implementing the fix)": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496041248
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496998325
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing the fix)": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496045869
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791496998783
+      }
+    ],
+    "5. Add per-user targeting, staged refresh, and rebind-at-unlock to the auth service": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791498489800
+      }
+    ],
+    "9.1 Confirm the bug condition exploration tests now pass": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791499331263
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500069375
+      }
+    ],
+    "9.2 Confirm the preservation tests still pass": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791499332365
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500069462
+      }
+    ],
+    "9. Verify the Correctness Properties against the fixed code": [
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500069545
+      },
+      {
+        "executionId": "6637cff6-c454-45ef-a145-e63e135c4191",
+        "chatSessionId": "sess_7a98af19-5f8d-4d89-9902-f15b1f741ef3",
+        "timestamp": 1791500069578
+      }
+    ]
+  }
+}

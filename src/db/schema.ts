@@ -41,6 +41,14 @@ export interface CachedCredential {
   activatedAt: string;
   failedAttempts: number;
   lockedUntil: string | null;
+  // Staged server-derived refresh captured during a password-only online login,
+  // committed into the HMAC-protected set (with HMAC recomputed) at next unlock.
+  // These are OUTSIDE the HMAC-protected set by design and hold untrusted-until-bound
+  // server values; no index / no Dexie version bump.
+  pendingRole?: Role | null;
+  pendingAccessStartDate?: string | null;
+  pendingAccessEndDate?: string | null;
+  pendingRefreshedAt?: string | null;
 }
 
 // ─── Reference lookups (populated online by cacheLoader) ─────────────────────
@@ -144,6 +152,9 @@ export interface SyncMeta {
   lastSyncAt: string | null;
   lastReferenceRefreshAt: string | null;
   schemaVersion: number;
+  // Resolves the offline "relevant user" — who last authenticated online / activated /
+  // unlocked offline. Non-indexed (syncMeta is keyed only by `key`); no version bump.
+  lastActiveUserId?: string | null;
 }
 
 // ─── Database ────────────────────────────────────────────────────────────────

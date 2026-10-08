@@ -198,14 +198,74 @@ export async function activateOffline(input: {
   };
 
   await db.credentials.put(credential);
+
+  // Record the relevant-user pointer for offline mode resolution (Req 2.1, 2.7).
+  // Activation wrote a fresh HMAC over fresh server fields, so no staged refresh is
+  // needed here — just set the pointer on success.
+  await setLastActiveUserId(auth.user.id);
+
   return { ok: true, credential };
+}
+
+// ─── Relevant-user pointer helper (read-merge-write; preserves other meta) ──────
+// Records who last authenticated online / activated / unlocked offline so the offline
+// mode selection can resolve the "relevant user". syncMeta is keyed only by `key`, so a
+// read-merge-write keeps `lastSyncAt` / `lastReferenceRefreshAt` intact.
+async function setLastActiveUserId(userId: string): Promise<void> {
+  const meta = await db.syncMeta.get("global");
+  await db.syncMeta.put({
+    key: "global",
+    lastSyncAt: meta?.lastSyncAt ?? null,
+    lastReferenceRefreshAt: meta?.lastReferenceRefreshAt ?? null,
+    schemaVersion: meta?.schemaVersion ?? 2,
+    lastActiveUserId: userId,
+  });
+}
+
+// ─── Staged credential refresh (Req 2.3, 2.5) ───────────────────────────────
+// Called by LoginPage on a password-only online login when a credential already exists
+// for the authenticating user. A password-only login has no raw PIN, so it cannot
+// re-sign the PIN-keyed HMAC; instead it stages the fresh server-derived values in the
+// non-protected `pending*` fields and leaves the HMAC-protected set (and `hmac`)
+// untouched — the binding stays valid. The staged values are committed into the
+// protected set (with the HMAC recomputed from the entered PIN) at the next offline
+// unlock (rebind-at-unlock, see `unlockOffline`).
+export async function stageCredentialRefresh(
+  userId: string,
+  serverFields: {
+    role: Role;
+    accessStartDate: string;
+    accessEndDate: string | null;
+  }
+): Promise<void> {
+  // Per-user lookup; never operate on another user's record (fail-closed, 3.8).
+  const credential = await db.credentials.get(userId);
+  if (!credential) {
+    // No credential to refresh — the caller handles PinSetup for this user.
+    return;
+  }
+
+  // Write ONLY the non-protected `pending*` fields; the HMAC-protected set and `hmac`
+  // are left intact so the existing binding remains valid.
+  await db.credentials.update(userId, {
+    pendingRole: serverFields.role,
+    pendingAccessStartDate: serverFields.accessStartDate,
+    pendingAccessEndDate: serverFields.accessEndDate,
+    pendingRefreshedAt: new Date().toISOString(),
+  });
+
+  // Record the relevant-user pointer for offline mode resolution (Req 2.7).
+  await setLastActiveUserId(userId);
 }
 
 // ─── Offline unlock (Req 5) ────────────────────────────────────────────────────
 export async function unlockOffline(pin: string, userId?: string): Promise<UnlockResult> {
-  const credential = userId
-    ? await db.credentials.get(userId)
-    : (await db.credentials.toArray())[0];
+  // Resolve the target user per-record. NEVER `(await db.credentials.toArray())[0]` —
+  // that is defect D (the wrong user's credential). Prefer the explicit `userId`; when a
+  // caller omits it, fall back to the relevant-user pointer, then `get` that record.
+  const targetUserId =
+    userId ?? (await db.syncMeta.get("global"))?.lastActiveUserId ?? undefined;
+  const credential = targetUserId ? await db.credentials.get(targetUserId) : undefined;
 
   if (!credential) {
     return { ok: false, reason: "no_credential", message: "No offline access is set up on this device." };
@@ -252,14 +312,86 @@ export async function unlockOffline(pin: string, userId?: string): Promise<Unloc
     };
   }
 
-  // Success: reset counters, establish provisional offline session.
+  // Success: reset counters.
   await db.credentials.update(credential.userId, { failedAttempts: 0, lockedUntil: null });
+
+  // Session fields default to the currently stored (pre-refresh) values; a successful
+  // rebind-at-unlock below promotes any staged refresh over them.
+  let sessionRole = credential.role;
+  let sessionAccessStartDate = credential.accessStartDate;
+  let sessionAccessEndDate = credential.accessEndDate;
+  let sessionActivatedAt = credential.activatedAt;
+
+  // Rebind-at-unlock (HMAC-Refresh Decision option 4): the integrity check above already
+  // ran against the CURRENTLY STORED HMAC-protected fields, so a tampered record is
+  // rejected before we get here. Now that the PIN is in hand, commit any staged refresh:
+  // recompute the HMAC over the NEW protected set and persist it atomically with the new
+  // fields, clearing all `pending*`. A failure aborts the commit and leaves the prior
+  // valid credential intact (never a half-written protected set).
+  const hasPendingRefresh =
+    credential.pendingRole != null ||
+    credential.pendingAccessStartDate != null ||
+    credential.pendingAccessEndDate != null ||
+    credential.pendingRefreshedAt != null;
+
+  if (hasPendingRefresh) {
+    const newRole = (credential.pendingRole ?? credential.role) as Role;
+    const newAccessStartDate = credential.pendingAccessStartDate ?? credential.accessStartDate;
+    // `pendingAccessEndDate` is nullable by design (a credential may legitimately have no
+    // end date). Staging always writes the whole `pending*` set together, so when a
+    // refresh is pending this value is authoritative (null => no end date).
+    const newAccessEndDate = credential.pendingAccessEndDate ?? null;
+    const newActivatedAt = credential.pendingRefreshedAt ?? credential.activatedAt;
+
+    try {
+      const newHmac = await computeHmac(
+        integrityMessage({
+          pinHash: credential.pinHash,
+          salt: credential.salt,
+          kdfIterations: credential.kdfIterations,
+          role: newRole,
+          accessStartDate: newAccessStartDate,
+          accessEndDate: newAccessEndDate,
+          activatedAt: newActivatedAt,
+        }),
+        pin,
+        credential.salt,
+        credential.kdfIterations
+      );
+
+      await db.credentials.update(credential.userId, {
+        role: newRole,
+        accessStartDate: newAccessStartDate,
+        accessEndDate: newAccessEndDate,
+        activatedAt: newActivatedAt,
+        hmac: newHmac,
+        pendingRole: null,
+        pendingAccessStartDate: null,
+        pendingAccessEndDate: null,
+        pendingRefreshedAt: null,
+      });
+
+      sessionRole = newRole;
+      sessionAccessStartDate = newAccessStartDate;
+      sessionAccessEndDate = newAccessEndDate;
+      sessionActivatedAt = newActivatedAt;
+    } catch {
+      // Commit failed: abort the rebind. The prior valid credential (and its HMAC) is
+      // untouched, so the session proceeds on the pre-refresh fields and the staged
+      // refresh is retried at the next unlock.
+    }
+  }
+
+  // Record the relevant-user pointer for offline mode resolution (Req 2.7).
+  await setLastActiveUserId(credential.userId);
+
+  // Establish the provisional offline session from the now-current fields.
   currentSession = {
     userId: credential.userId,
-    role: credential.role,
-    accessStartDate: credential.accessStartDate,
-    accessEndDate: credential.accessEndDate,
-    activatedAt: credential.activatedAt,
+    role: sessionRole,
+    accessStartDate: sessionAccessStartDate,
+    accessEndDate: sessionAccessEndDate,
+    activatedAt: sessionActivatedAt,
     sessionStartedAt: new Date().toISOString(),
   };
   return { ok: true, session: currentSession };

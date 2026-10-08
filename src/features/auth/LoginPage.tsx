@@ -2,16 +2,17 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "@/db/schema";
 import { getDashboardRoute } from "@/lib/permissions";
-import { activateOffline, unlockOffline } from "@/services/authService";
+import { activateOffline, stageCredentialRefresh, unlockOffline } from "@/services/authService";
 import { autoRefreshReferenceCache } from "@/utils/cacheLoader";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { LoginForm, type AuthenticatedContext } from "@/features/auth/LoginForm";
+import { OnlineRequired } from "@/features/auth/OnlineRequired";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Role } from "@/lib/types";
 
-type Mode = "loading" | "password" | "pin-setup" | "pin-unlock";
+type Mode = "loading" | "password" | "pin-setup" | "pin-unlock" | "online-required";
 
 const MIN_PIN_LENGTH = 4;
 
@@ -20,24 +21,74 @@ export function LoginPage() {
   const online = useOnlineStatus();
   const [mode, setMode] = useState<Mode>("loading");
   const [authCtx, setAuthCtx] = useState<AuthenticatedContext | null>(null);
+  // Resolved target user for an offline PIN unlock (P1-E: unlock the relevant user's
+  // own credential, never the first/arbitrary record).
+  const [unlockUserId, setUnlockUserId] = useState<string | null>(null);
 
-  // Decide the initial mode: offline with a cached credential -> PIN unlock.
+  // Initial-mode effect. Keyed on `online` and re-runs on every connectivity flip so a
+  // transient `navigator.onLine` value cannot permanently strand the user — when
+  // connectivity changes the mode is re-resolved. Fail-closed throughout: offline with
+  // no credential for the relevant user resolves to `online-required`, never a stray PIN
+  // prompt or an unusable password form.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const credCount = await db.credentials.count();
-      if (!online && credCount > 0) setMode("pin-unlock");
-      else setMode("password");
+      // Online always starts at the password form.
+      if (online) {
+        if (!cancelled) {
+          setUnlockUserId(null);
+          setMode("password");
+        }
+        return;
+      }
+      // Offline: resolve the relevant user via the pointer, then gate on real per-user
+      // credential existence. A null pointer, a missing credential, or any read error
+      // ⇒ `online-required` (fail-closed).
+      try {
+        const meta = await db.syncMeta.get("global");
+        const uid = meta?.lastActiveUserId ?? null;
+        const cred = uid ? await db.credentials.get(uid) : undefined;
+        if (cancelled) return;
+        if (uid && cred) {
+          setUnlockUserId(uid);
+          setMode("pin-unlock");
+        } else {
+          setUnlockUserId(null);
+          setMode("online-required");
+        }
+      } catch {
+        if (cancelled) return;
+        setUnlockUserId(null);
+        setMode("online-required");
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [online]);
 
   async function handleAuthenticated(ctx: AuthenticatedContext) {
     // Populate offline reference caches while we have an active online session.
     autoRefreshReferenceCache();
-    const existing = await db.credentials.count();
-    if (existing > 0) {
+
+    // PER-USER decision (never a global count): does THIS user already have a credential?
+    const existing = await db.credentials.get(ctx.userId);
+    if (existing) {
+      // Defect C / P1-C: stage the fresh server-derived role/access window from this
+      // login. staging leaves the HMAC-protected set (and `hmac`) untouched so the PIN
+      // binding stays valid; it is committed at the next offline unlock. The current
+      // session routes immediately with the FRESH role.
+      await stageCredentialRefresh(ctx.userId, {
+        role: ctx.role,
+        accessStartDate: ctx.accessStartDate ?? existing.accessStartDate,
+        accessEndDate: ctx.accessEndDate,
+      });
       navigate(getDashboardRoute(ctx.role));
       return;
     }
+
+    // Defect D / P1-D: no credential for THIS user — offer PIN setup even when other
+    // users' credentials exist on the device.
     setAuthCtx(ctx);
     setMode("pin-setup");
   }
@@ -60,9 +111,13 @@ export function LoginPage() {
         )}
         {mode === "pin-unlock" && (
           <PinUnlock
+            userId={unlockUserId}
             onUnlocked={(role) => navigate(getDashboardRoute(role))}
             onUsePassword={() => setMode("password")}
           />
+        )}
+        {mode === "online-required" && (
+          <OnlineRequired onUsePassword={() => setMode("password")} />
         )}
       </div>
     </div>
@@ -102,6 +157,18 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
     onDone(res.credential.role);
   }
 
+  // Confirmed-Skip (defect A / P1-A): require an explicit confirmation that offline
+  // capture is unavailable until a PIN is set. On confirm we only navigate — NO
+  // credential is persisted and NO "setup complete" flag is set. Because offline mode
+  // selection now gates on real per-user credential existence, a skipped setup resolves
+  // offline to `online-required`, so no offline dead-end is reachable.
+  function handleSkip() {
+    const confirmed = window.confirm(
+      "Offline capture will be unavailable until you set a PIN. Continue?"
+    );
+    if (confirmed) onDone(ctx.role);
+  }
+
   return (
     <form onSubmit={submit} className="space-y-3">
       <p className="text-sm text-muted-foreground">
@@ -120,7 +187,7 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
         <Button type="submit" className="flex-1" disabled={busy}>
           {busy ? "Saving…" : "Set PIN"}
         </Button>
-        <Button type="button" variant="outline" onClick={() => onDone(ctx.role)}>
+        <Button type="button" variant="outline" onClick={handleSkip}>
           Skip
         </Button>
       </div>
@@ -130,9 +197,11 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
 
 // ─── Offline PIN unlock (unlockOffline) ───────────────────────────────────────
 function PinUnlock({
+  userId,
   onUnlocked,
   onUsePassword,
 }: {
+  userId: string | null;
   onUnlocked: (role: Role) => void;
   onUsePassword: () => void;
 }) {
@@ -144,7 +213,9 @@ function PinUnlock({
     e.preventDefault();
     setError(null);
     setBusy(true);
-    const res = await unlockOffline(pin);
+    // Target the resolved relevant user's own credential (P1-E). `userId` is non-null
+    // whenever this screen is reached via the fail-closed initial-mode effect.
+    const res = await unlockOffline(pin, userId ?? undefined);
     setBusy(false);
     if (res.ok) {
       onUnlocked(res.session.role);

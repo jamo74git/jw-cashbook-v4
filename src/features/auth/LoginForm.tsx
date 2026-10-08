@@ -9,10 +9,13 @@ import { Turnstile } from "@/components/Turnstile";
 import type { Role } from "@/lib/types";
 
 export interface AuthenticatedContext {
+  userId: string;
   email: string;
   password: string;
   role: Role;
   turnstileToken: string | null;
+  accessStartDate: string | null;
+  accessEndDate: string | null;
 }
 
 interface LoginFormProps {
@@ -121,7 +124,15 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
 
     // Hand off to the parent for optional PIN setup, or route to the dashboard.
     if (onAuthenticated) {
-      onAuthenticated({ email: email.trim(), password, role, turnstileToken });
+      onAuthenticated({
+        userId: data.user.id,
+        email: email.trim(),
+        password,
+        role,
+        turnstileToken,
+        accessStartDate: access.start_date ?? null,
+        accessEndDate: access.end_date ?? null,
+      });
     } else {
       navigate(getDashboardRoute(role));
     }

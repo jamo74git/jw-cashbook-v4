@@ -84,6 +84,9 @@ export async function refreshReferenceCache(): Promise<RefreshResult> {
         lastSyncAt: meta?.lastSyncAt ?? null,
         lastReferenceRefreshAt: new Date().toISOString(),
         schemaVersion: 2,
+        // Preserve the offline "relevant user" pointer set by authService; the
+        // reference-cache refresh must never clobber it (read-merge-write).
+        lastActiveUserId: meta?.lastActiveUserId ?? null,
       });
     }
   );
