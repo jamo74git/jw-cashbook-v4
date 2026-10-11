@@ -176,10 +176,11 @@ export function getDashboardRoute(role: Role): string {
       return "/review";
     case "Elder":
       return "/elder";
+    // Treasurer and Chairperson default to the shared /dashboard hub
+    // (TreasurerDashboard). The /chairperson portal remains reachable directly.
     case "Chairperson":
-      return "/chairperson";
     case "Treasurer":
-      return "/treasurer";
+      return "/dashboard";
     case "Auditor":
       return "/audit";
     case "Secretary":

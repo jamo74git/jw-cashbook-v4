@@ -11,6 +11,7 @@
 
 import Dexie, { type Table } from "dexie";
 import type { Role, HierarchyLevel, LineSection } from "@/lib/types";
+import type { AttendanceType, CensusBucket, NewMemberType } from "@/lib/phaseTypes";
 
 export type LocalSyncStatus = "pending" | "syncing" | "synced" | "conflict" | "failed";
 
@@ -79,6 +80,63 @@ export interface OfficerLookup {
 export interface CongregationSettings {
   congregation_id: string; // pk
   proof_mandatory: boolean;
+  // ── Phase A: treasurer/chair dashboard flags (additive, non-indexed) ────────
+  // All optional so existing v2 rows (proof_mandatory only) stay valid; the
+  // dashboard repo defaults the flags to false when absent.
+  hall_capacity?: number | null;
+  allow_treasurer_census?: boolean;
+  allow_treasurer_new_members?: boolean;
+  allow_treasurer_baptisms?: boolean;
+  last_census_verified_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+// ─── Phase B–D stub mirrors (schema-only in Phase A; no UI/write path yet) ────
+export interface LocalCensusCongregation {
+  id: string;
+  congregation_id: string;
+  year: number;
+  month: number;
+  total_members: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LocalCensusPriestship {
+  id: string;
+  congregation_id: string;
+  priest_id: string | null;
+  member_count: number | null;
+  last_verified_at: string | null; // 3mo/6mo staleness anchor
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LocalAttendanceMonthly {
+  id: string;
+  congregation_id: string;
+  year: number;
+  month: number;
+  attendance_type: AttendanceType;
+  attendance_count: number | null;
+  visitors: number; // EXCLUDED from the attendance % calculation
+  signatures: Record<string, unknown> | null; // jsonb
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LocalNewMemberRegister {
+  id: string;
+  congregation_id: string;
+  type: NewMemberType;
+  first_name_enc: string | null; // ciphertext only
+  last_name_enc: string | null; // ciphertext only
+  census_bucket: CensusBucket;
+  photo_path: string | null;
+  consent_path: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 // ─── Local period (mirrors cashbook_period) ──────────────────────────────────
@@ -156,6 +214,11 @@ export class OacCashbookLocalDB extends Dexie {
   periods!: Table<LocalPeriod, string>;
   lineItems!: Table<LocalLineItem, string>;
   syncMeta!: Table<SyncMeta, string>;
+  // Phase B–D stub stores (added in v3; schema-only, no UI yet).
+  censusCongregation!: Table<LocalCensusCongregation, string>;
+  censusPriestship!: Table<LocalCensusPriestship, string>;
+  attendanceMonthly!: Table<LocalAttendanceMonthly, string>;
+  newMembersRegister!: Table<LocalNewMemberRegister, string>;
 
   constructor() {
     super("oac_cashbook_local");
@@ -184,6 +247,16 @@ export class OacCashbookLocalDB extends Dexie {
         // No production offline data exists; clear obsolete v1 line items.
         await tx.table("lineItems").clear();
       });
+
+    // v3 — ADD-ONLY: Phase B–D census/growth stub stores. No existing store is
+    // re-declared or altered, and the new congregation_settings columns are
+    // non-indexed object fields, so no upgrade function or data migration is needed.
+    this.version(3).stores({
+      censusCongregation: "id, congregation_id, year, month",
+      censusPriestship: "id, congregation_id, priest_id, last_verified_at",
+      attendanceMonthly: "id, congregation_id, year, month, attendance_type",
+      newMembersRegister: "id, congregation_id, type, census_bucket, created_at",
+    });
   }
 }
 

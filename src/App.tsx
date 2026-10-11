@@ -25,6 +25,7 @@ import { CongregationsScreen } from "@/ho/CongregationsScreen";
 import { HierarchyScreen } from "@/ho/HierarchyScreen";
 import { SecretaryReview } from "@/secretary/SecretaryReview";
 import { SettingsPage } from "@/settings/SettingsPage";
+import { TreasurerDashboard } from "@/components/TreasurerDashboard";
 
 // Code-split the two layout roots so an offline Capture load never pulls Admin code.
 const CaptureLayout = lazy(() => import("./capture/CaptureLayout"));
@@ -32,7 +33,7 @@ const AdminLayout = lazy(() => import("./admin/AdminLayout"));
 
 // Role dashboards not yet rebuilt in the Vite app; routed to a placeholder so users
 // land somewhere with a header + sign-out instead of bouncing back to /login.
-const ROLE_DASHBOARDS = ["/dashboard", "/treasurer", "/reports"];
+const ROLE_DASHBOARDS = ["/reports"];
 
 function Loading() {
   return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
@@ -135,6 +136,10 @@ export function App() {
             {ROLE_DASHBOARDS.map((path) => (
               <Route key={path} path={path} element={<RoleHome />} />
             ))}
+            {/* Treasurer/Chair hub (Phase A). Default landing for both roles; the
+                /chairperson portal below stays reachable directly. */}
+            <Route path="/dashboard" element={<TreasurerDashboard />} />
+            <Route path="/treasurer" element={<TreasurerDashboard />} />
             {/* Auditor portal (online-only; in-page audit.view_queue gate). */}
             <Route path="/audit" element={<AuditDashboard />} />
             <Route path="/audit/:periodId" element={<AuditReviewPage />} />

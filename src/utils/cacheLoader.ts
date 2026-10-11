@@ -50,7 +50,11 @@ export async function refreshReferenceCache(): Promise<RefreshResult> {
       .from("congregations")
       .select("id, name, code, overseership_id, eldership_id, apostleship_id, district_id"),
     supabase.from("hierarchy_levels").select("id, name, code, level_type, parent_id"),
-    supabase.from("congregation_settings").select("congregation_id, proof_mandatory"),
+    supabase
+      .from("congregation_settings")
+      .select(
+        "congregation_id, proof_mandatory, hall_capacity, allow_treasurer_census, allow_treasurer_new_members, allow_treasurer_baptisms, last_census_verified_at"
+      ),
   ]);
 
   const firstError = officersRes.error ?? congsRes.error ?? hierRes.error ?? settingsRes.error;
