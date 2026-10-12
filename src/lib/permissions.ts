@@ -83,6 +83,14 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "census.edit": { HO: "-", Apostle: "-", Overseer: "-", Elder: "E", Chairperson: "-", Auditor: "-", Treasurer: "E", Secretary: "-" },
   "census.view_90_flag": { HO: "-", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "-", Auditor: "-", Treasurer: "V", Secretary: "-" },
   "census.view_180_flag": { HO: "-", Apostle: "V", Overseer: "-", Elder: "-", Chairperson: "V", Auditor: "-", Treasurer: "-", Secretary: "-" },
+  // ── Census Manager (Phase B Treasurer/Chair dashboard) ───────────────────
+  // CENSUS_VIEW / CENSUS_EDIT drive the CensusManager gate, routed through the
+  // matrix (no role-string checks in the component). Chairperson always edits
+  // (CENSUS_EDIT = "E"); Treasurer has view-only here and is upgraded to edit
+  // by the per-congregation allow_treasurer_census flag, checked alongside
+  // CENSUS_VIEW in the dashboard gate.
+  "census.manage_view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "-", Treasurer: "V", Secretary: "T" },
+  "census.manage_edit": { HO: "-", Apostle: "-", Overseer: "-", Elder: "E", Chairperson: "E", Auditor: "-", Treasurer: "-", Secretary: "-" },
 
   // ── Admin ───────────────────────────────────────────────────────────────
   "admin.manage_users": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
@@ -102,6 +110,12 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "messaging.ho_send": { HO: "C", Apostle: "-", Overseer: "-", Elder: "R", Chairperson: "R", Auditor: "R", Treasurer: "R", Secretary: "-" },
   "messaging.internal": { HO: "-", Apostle: "-", Overseer: "-", Elder: "C", Chairperson: "C", Auditor: "C", Treasurer: "C", Secretary: "-" },
 };
+
+// Census Manager permission keys (Phase B). Exported so the dashboard/component
+// route their view/edit decisions through the matrix via hasPermission/getPermission
+// instead of comparing role strings.
+export const CENSUS_VIEW = "census.manage_view";
+export const CENSUS_EDIT = "census.manage_edit";
 
 // ─── Core Permission Check Functions ────────────────────────────────────────
 

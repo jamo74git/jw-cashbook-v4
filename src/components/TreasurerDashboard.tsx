@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { resolveAccess } from "@/lib/routeGuard";
 import { getSession } from "@/services/authService";
-import { hasPermission } from "@/lib/permissions";
+import { hasPermission, CENSUS_VIEW, CENSUS_EDIT } from "@/lib/permissions";
 import * as capture from "@/db/captureRepo";
 import * as dash from "@/db/dashboardRepo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { CensusManager } from "@/components/CensusManager";
 import type { Role } from "@/lib/types";
 
 const money = (n: number): string => `R${n.toFixed(2)}`;
@@ -137,6 +138,8 @@ export function TreasurerDashboard() {
           canCapture={canCapture}
           onOpenCapture={() => navigate("/capture")}
         />
+      ) : active === "census" ? (
+        <CensusPanel role={ctx.role} congregationId={ctx.congregationId} settings={settings} />
       ) : (
         <PlaceholderPanel sectionKey={active} settings={settings} />
       )}
@@ -288,5 +291,50 @@ function PlaceholderPanel({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// Census section — gated PURELY through the permissions matrix + the
+// allow_treasurer_census flag (no role-string checks). A role with CENSUS_EDIT
+// (Chairperson) always edits; a role with CENSUS_VIEW only (Treasurer) is upgraded
+// to edit by the per-congregation flag, otherwise it gets a read-only view.
+function CensusPanel({
+  role,
+  congregationId,
+  settings,
+}: {
+  role: Role;
+  congregationId: string;
+  settings: dash.DashboardSettings | null;
+}) {
+  const canView = hasPermission(role, CENSUS_VIEW);
+  const canEditBase = hasPermission(role, CENSUS_EDIT);
+  const allowTreasurerCensus = settings?.allow_treasurer_census ?? false;
+  const canEdit = canEditBase || (canView && allowTreasurerCensus);
+
+  if (!canView) {
+    return (
+      <Card>
+        <CardContent className="p-4">
+          <p className="text-sm text-muted-foreground" role="alert">
+            You do not have access to census data.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {!canEdit && (
+        <div
+          className="rounded border border-amber-300 bg-amber-50 p-2 text-xs font-medium text-amber-800"
+          role="status"
+        >
+          Managed by Chairperson — read-only view.
+        </div>
+      )}
+      <CensusManager congregationId={congregationId} readOnly={!canEdit} />
+    </div>
   );
 }

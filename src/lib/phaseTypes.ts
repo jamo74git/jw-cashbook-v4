@@ -38,6 +38,17 @@ export interface CensusCongregation {
   year: number;
   month: number;
   total_members: number | null;
+  // ── Phase B: additive breakdown fields (mirror schema.ts LocalCensusCongregation) ──
+  families?: number | null;
+  contact_points?: number | null;
+  total_souls?: number | null;
+  adults?: number | null;
+  children_0_15?: number | null;
+  unconfirmed_youth?: number | null;
+  confirmed_youth?: number | null;
+  seniors?: number | null;
+  mem_breakdown?: Record<string, unknown> | null;
+  source?: "upload" | "manual" | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -47,6 +58,10 @@ export interface CensusPriestship {
   congregation_id: string;
   priest_id: string | null;
   member_count: number | null;
+  // ── Phase B: additive split metrics (mirror schema.ts LocalCensusPriestship) ──
+  families?: number | null;
+  contact_points?: number | null;
+  souls?: number | null;
   // Staleness anchor for the 3mo (90d) / 6mo (180d) verification flags.
   last_verified_at: string | null;
   created_at: string | null;
