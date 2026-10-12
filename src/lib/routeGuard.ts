@@ -7,6 +7,7 @@
 
 import { getUserAccess, hasPermission, getDashboardRoute } from "@/lib/permissions";
 import { getSession } from "@/services/authService";
+import { db } from "@/db/schema";
 import type { Role, UserHierarchyAccess } from "@/lib/types";
 
 /**
@@ -19,13 +20,16 @@ export async function resolveAccess(): Promise<UserHierarchyAccess | null> {
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     const session = getSession();
     if (!session) return null;
+    // Enrich from the cached offline profile so downstream UserHierarchyAccess
+    // consumers get the real congregation/hierarchy/scope (offline-pin-multiuser).
+    const profile = await db.offlineUsers.get(session.userId);
     return {
       id: "offline-session",
       user_id: session.userId,
       role: session.role,
-      hierarchy_id: "",
-      congregation_id: null,
-      scope_level: "Congregation",
+      hierarchy_id: profile?.hierarchyId ?? "",
+      congregation_id: profile?.congregationId ?? null,
+      scope_level: profile?.scopeLevel ?? "Congregation",
       status: "active",
       start_date: session.accessStartDate,
       end_date: session.accessEndDate,

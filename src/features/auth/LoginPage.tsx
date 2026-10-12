@@ -1,17 +1,23 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { db } from "@/db/schema";
+import { db, type OfflineUserProfile } from "@/db/schema";
 import { getDashboardRoute } from "@/lib/permissions";
-import { activateOffline, unlockOffline } from "@/services/authService";
+import {
+  activateOffline,
+  unlockOffline,
+  persistOfflineUserProfile,
+  getOfflineUsers,
+} from "@/services/authService";
 import { autoRefreshReferenceCache } from "@/utils/cacheLoader";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { LoginForm, type AuthenticatedContext } from "@/features/auth/LoginForm";
+import { AccountPicker } from "@/features/auth/AccountPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Role } from "@/lib/types";
 
-type Mode = "loading" | "password" | "pin-setup" | "pin-unlock";
+type Mode = "loading" | "password" | "pin-setup" | "pin-unlock" | "account-picker";
 
 const MIN_PIN_LENGTH = 4;
 
@@ -20,21 +26,49 @@ export function LoginPage() {
   const online = useOnlineStatus();
   const [mode, setMode] = useState<Mode>("loading");
   const [authCtx, setAuthCtx] = useState<AuthenticatedContext | null>(null);
+  const [offlineUsers, setOfflineUsers] = useState<OfflineUserProfile[]>([]);
+  const [unlockUserId, setUnlockUserId] = useState<string | undefined>(undefined);
 
-  // Decide the initial mode: offline with a cached credential -> PIN unlock.
+  // Decide the initial mode. Offline: resolve the offline users with a usable
+  // credential and partition 0 -> password, 1 -> pin-unlock, >1 -> account-picker.
   useEffect(() => {
     (async () => {
-      const credCount = await db.credentials.count();
-      if (!online && credCount > 0) setMode("pin-unlock");
-      else setMode("password");
+      if (online) {
+        setMode("password");
+        return;
+      }
+      const users = await getOfflineUsers();
+      setOfflineUsers(users);
+      if (users.length === 0) {
+        setMode("password");
+      } else if (users.length === 1) {
+        setUnlockUserId(users[0].userId);
+        setMode("pin-unlock");
+      } else {
+        setMode("account-picker");
+      }
     })();
   }, [online]);
 
   async function handleAuthenticated(ctx: AuthenticatedContext) {
     // Populate offline reference caches while we have an active online session.
     autoRefreshReferenceCache();
-    const existing = await db.credentials.count();
-    if (existing > 0) {
+    // Persist a fresh non-secret offline profile (whether or not a PIN is set now),
+    // so the AccountPicker can list this user. Non-fatal.
+    try {
+      await persistOfflineUserProfile({
+        userId: ctx.userId,
+        email: ctx.email,
+        role: ctx.role,
+        congregationId: ctx.congregationId,
+        hierarchyId: ctx.hierarchyId,
+        scopeLevel: ctx.scopeLevel,
+      });
+    } catch {
+      // Non-blocking: login proceeds even if the profile cache write fails.
+    }
+    const existing = await db.credentials.get(ctx.userId);
+    if (existing) {
       navigate(getDashboardRoute(ctx.role));
       return;
     }
@@ -58,8 +92,19 @@ export function LoginPage() {
         {mode === "pin-setup" && authCtx && (
           <PinSetup ctx={authCtx} onDone={(role) => navigate(getDashboardRoute(role))} />
         )}
+        {mode === "account-picker" && (
+          <AccountPicker
+            users={offlineUsers}
+            onSelect={(id) => {
+              setUnlockUserId(id);
+              setMode("pin-unlock");
+            }}
+            onUsePassword={() => setMode("password")}
+          />
+        )}
         {mode === "pin-unlock" && (
           <PinUnlock
+            userId={unlockUserId}
             onUnlocked={(role) => navigate(getDashboardRoute(role))}
             onUsePassword={() => setMode("password")}
           />
@@ -130,9 +175,11 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
 
 // ─── Offline PIN unlock (unlockOffline) ───────────────────────────────────────
 function PinUnlock({
+  userId,
   onUnlocked,
   onUsePassword,
 }: {
+  userId?: string;
   onUnlocked: (role: Role) => void;
   onUsePassword: () => void;
 }) {
@@ -144,7 +191,7 @@ function PinUnlock({
     e.preventDefault();
     setError(null);
     setBusy(true);
-    const res = await unlockOffline(pin);
+    const res = await unlockOffline(pin, userId);
     setBusy(false);
     if (res.ok) {
       onUnlocked(res.session.role);

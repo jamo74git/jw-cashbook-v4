@@ -13,6 +13,9 @@ import {
   type PeriodStatus,
 } from "@/db/schema";
 import type { Role, LineSection } from "@/lib/types";
+import type { MonthStatus } from "@/lib/phaseTypes";
+import { getOrCreateDeviceId } from "@/lib/deviceId";
+import { getCurrentOacWeek } from "@/lib/oacWeeks";
 
 export type TabKey = "Members" | "Officers" | "Burial" | "Expenses" | "Banking";
 
@@ -44,6 +47,7 @@ export async function getOrCreateLocalPeriod(input: NewPeriodInput): Promise<Loc
   if (existing) return existing;
 
   const ts = now();
+  const deviceId = await getOrCreateDeviceId();
   const period: LocalPeriod = {
     localId: uuid(),
     naturalKey,
@@ -68,6 +72,17 @@ export async function getOrCreateLocalPeriod(input: NewPeriodInput): Promise<Loc
     updatedAt: ts,
     syncAttempts: 0,
     lastError: null,
+    // MVP hardening v5 additive defaults.
+    r0ConfirmedBy: null,
+    r0ConfirmedAt: null,
+    r0DeviceId: null,
+    actingAsRole: null,
+    actingAsAuditedAt: null,
+    captureDeviceId: deviceId,
+    closedAt: null,
+    monthStatus: "Open",
+    monthSubmittedToOverseerAt: null,
+    monthSubmittedBy: null,
   };
   await db.periods.add(period);
   return period;
@@ -99,16 +114,157 @@ export async function setPeriodStatus(periodLocalId: string, status: PeriodStatu
 /** Submit a period for audit (soft-lock). Governance gating is enforced by the UI. */
 export async function submitPeriod(
   periodLocalId: string,
-  comments?: { requestorComment?: string; elderApprovalComment?: string }
+  comments?: {
+    requestorComment?: string;
+    elderApprovalComment?: string;
+    // When a Chairperson submits on behalf of the Treasurer (Decision 5). The
+    // ACTING_AS_TREASURER audit row is flushed by the Sync_Engine once this period
+    // syncs (offline) / can be logged online by the caller.
+    actingAsRole?: Role | null;
+  }
 ): Promise<void> {
   await db.periods.update(periodLocalId, {
     status: "Submitted",
     submittedAt: now(),
     requestorComment: comments?.requestorComment ?? null,
     elderApprovalComment: comments?.elderApprovalComment ?? null,
+    actingAsRole: comments?.actingAsRole ?? null,
     updatedAt: now(),
     localStatus: "pending",
   });
+}
+
+// ─── R0 "No tithing this week" (MVP hardening v5, R0 RULE) ───────────────────
+// Resolve/create the period, then take it straight Draft -> Submitted (for audit)
+// with the full R0 audit trail. No line items are captured. The week still flows
+// Submitted -> AuditApproved like any other, preserving the audit trail.
+export async function confirmR0NoTithing(input: {
+  congregationId: string;
+  weekKey: string;
+  service: "AM" | "PM";
+  year: number;
+  month: number;
+  week: number;
+  userId: string;
+  actingAsRole: Role | null;
+}): Promise<LocalPeriod> {
+  const period = await getOrCreateLocalPeriod({
+    congregationId: input.congregationId,
+    weekKey: input.weekKey,
+    service: input.service,
+    year: input.year,
+    month: input.month,
+    week: input.week,
+    userId: input.userId,
+  });
+  const ts = now();
+  const deviceId = await getOrCreateDeviceId();
+  await db.periods.update(period.localId, {
+    status: "Submitted",
+    submittedAt: ts,
+    r0ConfirmedBy: input.userId,
+    r0ConfirmedAt: ts,
+    r0DeviceId: deviceId,
+    actingAsRole: input.actingAsRole,
+    localStatus: "pending",
+    updatedAt: ts,
+  });
+  return (await db.periods.get(period.localId)) ?? period;
+}
+
+// ─── New-Week guard support: weeks not yet Closed, before the current week ────
+// Distinct from dashboardRepo.countOutstandingWeeks (a localStatus-based KPI): this
+// is the capture guard's definition — any period not yet AuditApproved whose
+// [year, month, week] precedes the current OAC week. Returned oldest-first.
+export async function listOutstandingWeeks(
+  congregationId: string,
+  now: Date = new Date()
+): Promise<LocalPeriod[]> {
+  const cur = getCurrentOacWeek(now);
+  const curWeekNum = parseInt(cur.weekKey.split("-W")[1] ?? "0", 10);
+  const periods = await db.periods.where("congregationId").equals(congregationId).toArray();
+  const precedesCurrent = (p: LocalPeriod): boolean => {
+    if (p.year !== cur.year) return p.year < cur.year;
+    if (p.month !== cur.month) return p.month < cur.month;
+    return p.week < curWeekNum;
+  };
+  return periods
+    .filter((p) => p.status !== "AuditApproved" && precedesCurrent(p))
+    .sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      if (a.month !== b.month) return a.month - b.month;
+      return a.week - b.week;
+    });
+}
+
+// ─── Auditor approval: Draft/Submitted -> AuditApproved (UI "Closed") ─────────
+export async function setClosed(periodLocalId: string): Promise<void> {
+  await db.periods.update(periodLocalId, {
+    status: "AuditApproved",
+    closedAt: now(),
+    updatedAt: now(),
+    localStatus: "pending",
+  });
+}
+
+// ─── Month status machine (Decision 2) ────────────────────────────────────────
+// If EVERY period of (congregation, year, month) is AuditApproved, set monthStatus
+// to "AllWeeksClosed" across all of them (unless already further along). Returns the
+// resulting MonthStatus for that month (defaults to "Open" when no periods exist).
+export async function recomputeMonthStatus(
+  congregationId: string,
+  year: number,
+  month: number
+): Promise<MonthStatus> {
+  const periods = (await db.periods.where("congregationId").equals(congregationId).toArray()).filter(
+    (p) => p.year === year && p.month === month
+  );
+  if (periods.length === 0) return "Open";
+
+  // Preserve a month that has already advanced beyond AllWeeksClosed.
+  const advanced = periods.find(
+    (p) => p.monthStatus === "MonthSubmittedToOverseer" || p.monthStatus === "SubmittedToHO"
+  );
+  if (advanced) return advanced.monthStatus ?? "Open";
+
+  const allClosed = periods.every((p) => p.status === "AuditApproved");
+  const next: MonthStatus = allClosed ? "AllWeeksClosed" : "Open";
+  const ts = now();
+  for (const p of periods) {
+    if ((p.monthStatus ?? "Open") !== next) {
+      await db.periods.update(p.localId, { monthStatus: next, updatedAt: ts });
+    }
+  }
+  return next;
+}
+
+// ─── Chair/Elder bulk MONTH submit to Overseer (Decision 2) ───────────────────
+// Guard: only proceed when the month is AllWeeksClosed. Sets MonthSubmittedToOverseer
+// across every period of (congregation, year, month). Overseer->HO (SubmittedToHO) is
+// modeled only — no action here.
+export async function bulkSubmitMonthToOverseer(input: {
+  congregationId: string;
+  year: number;
+  month: number;
+  userId: string;
+}): Promise<MonthStatus> {
+  const current = await recomputeMonthStatus(input.congregationId, input.year, input.month);
+  if (current !== "AllWeeksClosed") return current;
+
+  const periods = (
+    await db.periods.where("congregationId").equals(input.congregationId).toArray()
+  ).filter((p) => p.year === input.year && p.month === input.month);
+  const ts = now();
+  for (const p of periods) {
+    await db.periods.update(p.localId, {
+      monthStatus: "MonthSubmittedToOverseer",
+      monthSubmittedToOverseerAt: ts,
+      monthSubmittedBy: input.userId,
+      updatedAt: ts,
+      localStatus: "pending",
+    });
+  }
+  return "MonthSubmittedToOverseer";
 }
 
 // ─── Line items ──────────────────────────────────────────────────────────────

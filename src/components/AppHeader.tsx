@@ -3,40 +3,41 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { createClient } from "@/lib/supabase/client";
-import { getUserAccess } from "@/lib/permissions";
+import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
+import { resolveHierarchyChain, type ChainSegment } from "@/lib/hierarchyChain";
 import { signOut as clearOfflineSession } from "@/services/authService";
 import { Badge } from "@/components/ui/badge";
-import type { UserHierarchyAccess } from "@/lib/types";
 
 export function AppHeader() {
   const supabase = createClient();
   const navigate = useNavigate();
-  const [access, setAccess] = useState<UserHierarchyAccess | null>(null);
-  const [displayName, setDisplayName] = useState("");
-  const [congCount, setCongCount] = useState(0);
+  const [identity, setIdentity] = useState<CurrentIdentity | null>(null);
+  const [chain, setChain] = useState<ChainSegment[]>([]);
   const [districtName, setDistrictName] = useState("");
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
-      const a = await getUserAccess();
-      if (!a) return;
-      setAccess(a);
-      const { data: { user } } = await supabase.auth.getUser();
-      // Display name from email prefix (hide full email)
-      const name = user?.email?.split("@")[0] ?? "User";
-      setDisplayName(name.charAt(0).toUpperCase() + name.slice(1));
+      // Online AND offline-aware; fail-closed null -> render nothing.
+      const id = await getCurrentIdentity();
+      if (!id) return;
+      setIdentity(id);
 
-      if (a.scope_level === "Eldership") {
-        const { count } = await supabase.from("congregations").select("id", { count: "exact", head: true }).eq("eldership_id", a.hierarchy_id);
-        setCongCount(count ?? 0);
-      } else if (a.congregation_id) {
-        setCongCount(1);
-      }
+      // Full canonical breadcrumb for ALL roles (cache-first, graceful fallback).
+      const segs = await resolveHierarchyChain({
+        congregationId: id.congregationId,
+        hierarchyId: id.hierarchyId,
+        scopeLevel: id.scopeLevel,
+        congregationName: id.congregationName,
+      });
+      setChain(segs);
 
-      // For HO users, fetch district name
-      if (a.role === "HO") {
+      // HO district-name display stays online-only (admin is online-only).
+      if (id.role === "HO" && id.isOnline) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
         const { data: assignments } = await supabase
           .from("ho_district_assignments")
           .select("district_id")
@@ -69,7 +70,10 @@ export function AppHeader() {
     navigate("/login");
   }
 
-  const initials = displayName.slice(0, 2).toUpperCase();
+  const displayName = identity?.displayName ?? "";
+  const initials = identity?.initials ?? displayName.slice(0, 2).toUpperCase();
+  // Canonical breadcrumb (Conference/COA | Apostolate | … | Congregation).
+  const breadcrumb = chain.map((s) => s.name).join(" | ");
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background shadow-sm">
@@ -82,18 +86,22 @@ export function AppHeader() {
 
         {/* Right: Single banner line + avatar */}
         <div className="flex items-center gap-3 text-xs" ref={menuRef}>
-          <div className="hidden sm:flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-2 min-w-0">
             <span className="font-medium">{displayName}</span>
             <span className="text-muted-foreground">|</span>
-            <span>Role: <b>{access?.role}</b></span>
+            <span>Role: <b>{identity?.role}</b></span>
             <span className="text-muted-foreground">|</span>
-            {access?.role === "HO" && districtName ? (
+            {breadcrumb ? (
+              <span className="truncate max-w-[640px]" title={breadcrumb}>{breadcrumb}</span>
+            ) : identity?.role === "HO" && districtName ? (
               <span>District: <b>{districtName}</b></span>
             ) : (
-              <span>Scope: <b>{congCount} Congregation{congCount !== 1 ? "s" : ""}</b></span>
+              <span>
+                Scope: <b>{identity?.scopeCount ?? 0} Congregation{(identity?.scopeCount ?? 0) !== 1 ? "s" : ""}</b>
+              </span>
             )}
           </div>
-          {access && <Badge variant="secondary" className="text-[10px] sm:hidden">{access.role}</Badge>}
+          {identity && <Badge variant="secondary" className="text-[10px] md:hidden">{identity.role}</Badge>}
 
           {/* Avatar dropdown */}
           <div className="relative">
@@ -103,8 +111,8 @@ export function AppHeader() {
             {showMenu && (
               <div className="absolute right-0 top-9 z-50 min-w-40 rounded-md border bg-background p-1 shadow-lg">
                 <div className="px-3 py-2 border-b text-xs">
-                  <p className="font-medium">{displayName}</p>
-                  <p className="text-muted-foreground">{access?.role} · {access?.scope_level}</p>
+                  <p className="font-medium">{identity?.email || displayName}</p>
+                  <p className="text-muted-foreground">{identity?.role} · {identity?.scopeLevel}</p>
                 </div>
                 <button onClick={() => { setShowMenu(false); navigate("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings

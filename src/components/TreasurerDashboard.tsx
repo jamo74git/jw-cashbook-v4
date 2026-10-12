@@ -2,14 +2,25 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { resolveAccess } from "@/lib/routeGuard";
 import { getSession } from "@/services/authService";
-import { hasPermission, CENSUS_VIEW, CENSUS_EDIT } from "@/lib/permissions";
+import {
+  hasPermission,
+  CENSUS_VIEW,
+  CENSUS_EDIT,
+  CAPTURE_R0_CONFIRM,
+  MONTH_SUBMIT,
+  logActingAsTreasurer,
+} from "@/lib/permissions";
 import * as capture from "@/db/captureRepo";
 import * as dash from "@/db/dashboardRepo";
+import { getCurrentOacWeek } from "@/lib/oacWeeks";
+import { periodStatusLabel } from "@/lib/statusLabels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CensusManager } from "@/components/CensusManager";
 import type { Role } from "@/lib/types";
+import type { MonthStatus } from "@/lib/phaseTypes";
+import type { LocalPeriod } from "@/db/schema";
 
 const money = (n: number): string => `R${n.toFixed(2)}`;
 
@@ -36,16 +47,17 @@ interface Kpis {
 }
 
 export function TreasurerDashboard() {
-  const navigate = useNavigate();
   const [ctx, setCtx] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "ready"; role: Role; congregationId: string }
+    | { status: "ready"; role: Role; congregationId: string; userId: string }
   >({ status: "loading" });
   const [settings, setSettings] = useState<dash.DashboardSettings | null>(null);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [periods, setPeriods] = useState<dash.RecentPeriodRow[]>([]);
+  const [monthStatus, setMonthStatus] = useState<MonthStatus>("Open");
   const [active, setActive] = useState<Section>("capture");
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -53,6 +65,7 @@ export function TreasurerDashboard() {
         const access = await resolveAccess();
         const session = getSession();
         const role = (access?.role ?? session?.role) as Role | undefined;
+        const userId = access?.user_id ?? session?.userId ?? "";
         if (!role) {
           setCtx({ status: "error", message: "No active session." });
           return;
@@ -67,13 +80,15 @@ export function TreasurerDashboard() {
           });
           return;
         }
-        const [s, outstanding, cvb, faithfulness, interim, recent] = await Promise.all([
+        const cur = getCurrentOacWeek();
+        const [s, outstanding, cvb, faithfulness, interim, recent, mStatus] = await Promise.all([
           dash.getDashboardSettings(congregationId),
           dash.countOutstandingWeeks(congregationId),
           dash.getThisMonthCapturedVsBanked(congregationId),
           dash.countOfficerFaithfulness(congregationId),
           dash.countInterimInUse(congregationId),
           dash.listRecentPeriods(congregationId, 8),
+          capture.recomputeMonthStatus(congregationId, cur.year, cur.month),
         ]);
         setSettings(s);
         setKpis({
@@ -84,7 +99,8 @@ export function TreasurerDashboard() {
           interim,
         });
         setPeriods(recent);
-        setCtx({ status: "ready", role, congregationId });
+        setMonthStatus(mStatus);
+        setCtx({ status: "ready", role, congregationId, userId });
       } catch (err) {
         setCtx({
           status: "error",
@@ -92,7 +108,7 @@ export function TreasurerDashboard() {
         });
       }
     })();
-  }, []);
+  }, [reloadTick]);
 
   if (ctx.status === "loading")
     return <p className="p-6 text-sm text-muted-foreground">Loading dashboard…</p>;
@@ -104,6 +120,7 @@ export function TreasurerDashboard() {
     );
 
   const canCapture = hasPermission(ctx.role, "capture.create");
+  const readyCtx = ctx;
 
   return (
     <main className="max-w-5xl mx-auto p-4 space-y-4">
@@ -136,7 +153,11 @@ export function TreasurerDashboard() {
           kpis={kpis}
           periods={periods}
           canCapture={canCapture}
-          onOpenCapture={() => navigate("/capture")}
+          role={readyCtx.role}
+          congregationId={readyCtx.congregationId}
+          userId={readyCtx.userId}
+          monthStatus={monthStatus}
+          onRefresh={() => setReloadTick((t) => t + 1)}
         />
       ) : active === "census" ? (
         <CensusPanel role={ctx.role} congregationId={ctx.congregationId} settings={settings} />
@@ -151,13 +172,43 @@ function CaptureLanding({
   kpis,
   periods,
   canCapture,
-  onOpenCapture,
+  role,
+  congregationId,
+  userId,
+  monthStatus,
+  onRefresh,
 }: {
   kpis: Kpis | null;
   periods: dash.RecentPeriodRow[];
   canCapture: boolean;
-  onOpenCapture: () => void;
+  role: Role;
+  congregationId: string;
+  userId: string;
+  monthStatus: MonthStatus;
+  onRefresh: () => void;
 }) {
+  const navigate = useNavigate();
+  const [showNewWeek, setShowNewWeek] = useState(false);
+  const [monthBusy, setMonthBusy] = useState(false);
+
+  const canSubmitMonth = hasPermission(role, MONTH_SUBMIT);
+
+  async function handleSubmitMonth() {
+    setMonthBusy(true);
+    try {
+      const cur = getCurrentOacWeek();
+      await capture.bulkSubmitMonthToOverseer({
+        congregationId,
+        year: cur.year,
+        month: cur.month,
+        userId,
+      });
+      onRefresh();
+    } finally {
+      setMonthBusy(false);
+    }
+  }
+
   if (!kpis) return <p className="text-sm text-muted-foreground">Loading figures…</p>;
 
   return (
@@ -195,13 +246,48 @@ function CaptureLanding({
         </Card>
       </div>
 
+      {/* All weeks Closed -> Chair/Elder may bulk-submit the month to the Overseer. */}
+      {monthStatus === "AllWeeksClosed" && canSubmitMonth && (
+        <div className="flex items-center justify-between rounded border border-emerald-300 bg-emerald-50 p-2">
+          <p className="text-xs font-medium text-emerald-800">
+            All weeks closed for this month. Ready to submit to Overseer.
+          </p>
+          <Button size="sm" disabled={monthBusy} onClick={handleSubmitMonth}>
+            {monthBusy ? "Submitting…" : "Submit Month to Overseer"}
+          </Button>
+        </div>
+      )}
+      {monthStatus === "MonthSubmittedToOverseer" && (
+        <div className="rounded border border-sky-300 bg-sky-50 p-2 text-xs font-medium text-sky-800" role="status">
+          Month submitted to Overseer.
+        </div>
+      )}
+
       {/* Last 8 periods */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold">Recent weeks</h2>
-        <Button size="sm" disabled={!canCapture} onClick={onOpenCapture}>
+        <Button
+          size="sm"
+          disabled={!canCapture}
+          title="Capture cashbook for a new week"
+          onClick={() => setShowNewWeek(true)}
+        >
           + New Week
         </Button>
       </div>
+
+      {showNewWeek && (
+        <NewWeekDialog
+          role={role}
+          congregationId={congregationId}
+          userId={userId}
+          onClose={() => setShowNewWeek(false)}
+          onDone={(localId) => {
+            setShowNewWeek(false);
+            navigate("/capture/" + localId);
+          }}
+        />
+      )}
 
       {periods.length === 0 ? (
         <p className="text-xs text-muted-foreground">
@@ -225,13 +311,13 @@ function CaptureLanding({
                   <button
                     type="button"
                     className="w-full py-1 pr-2 text-left hover:underline"
-                    onClick={onOpenCapture}
+                    onClick={() => navigate("/capture/" + p.localId)}
                   >
                     {p.weekEnding} · {p.service}
                   </button>
                 </td>
                 <td className="py-1 pr-2">
-                  <Badge variant="outline">{p.status}</Badge>
+                  <Badge variant="outline">{periodStatusLabel(p.status)}</Badge>
                 </td>
                 <td className="py-1 pr-2 text-right">{money(p.total)}</td>
                 <td className="py-1 pr-2 text-right">{money(p.banked)}</td>
@@ -253,6 +339,218 @@ function CaptureLanding({
       )}
     </div>
   );
+}
+
+// New-Week guard + R0 flow (Decision 3; the R0 UI lives HERE, not in CashbookForm).
+// Behaviour:
+//  - Hard block (independent of the modal): getOrCreateLocalPeriod's unique naturalKey
+//    (`${congregationId}|${weekKey}|${service}`) returns the EXISTING period, so we
+//    never create a duplicate of the same week-number for the same congregation+month.
+//  - If OUTSTANDING weeks exist (not yet Closed, before the current week), warn and
+//    offer [Go to Outstanding] or [Create Week{N} anyway].
+//  - "No tithing this week" ticks the R0 path: a confirmation sub-modal, then a direct
+//    Draft -> Submitted with the R0 audit trail.
+//  - A Chairperson acts-as-Treasurer (ACTING_AS_TREASURER logged / queued).
+function NewWeekDialog({
+  role,
+  congregationId,
+  userId,
+  onClose,
+  onDone,
+}: {
+  role: Role;
+  congregationId: string;
+  userId: string;
+  onClose: () => void;
+  onDone: (periodLocalId: string) => void;
+}) {
+  const cur = getCurrentOacWeek();
+  const targetWeekNum = parseInt(cur.weekKey.split("-W")[1] ?? "1", 10);
+  const [outstanding, setOutstanding] = useState<LocalPeriod[]>([]);
+  const [noTithing, setNoTithing] = useState(false);
+  const [confirmR0, setConfirmR0] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const service: "AM" | "PM" = "AM";
+  const canConfirmR0 = hasPermission(role, CAPTURE_R0_CONFIRM);
+  const actingAsRole: Role | null = role === "Chairperson" ? "Treasurer" : null;
+
+  useEffect(() => {
+    (async () => {
+      setOutstanding(await capture.listOutstandingWeeks(congregationId));
+    })();
+  }, [congregationId]);
+
+  async function logActingAsIfOnline(periodLocalId: string) {
+    if (!actingAsRole) return;
+    const online = typeof navigator === "undefined" ? true : navigator.onLine;
+    if (!online) return; // offline: flushed by the Sync_Engine on reconnect
+    try {
+      await logActingAsTreasurer({
+        userId,
+        entityType: "cashbook_period",
+        entityId: periodLocalId,
+      });
+    } catch {
+      // Non-fatal; the audit flush also runs on sync.
+    }
+  }
+
+  async function proceedCreate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await capture.getOrCreateLocalPeriod({
+        congregationId,
+        weekKey: cur.weekKey,
+        service,
+        year: cur.year,
+        month: cur.month,
+        week: targetWeekNum,
+        userId,
+      });
+      if (actingAsRole) await logActingAsIfOnline(p.localId);
+      onDone(p.localId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create the week.");
+      setBusy(false);
+    }
+  }
+
+  async function proceedR0() {
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await capture.confirmR0NoTithing({
+        congregationId,
+        weekKey: cur.weekKey,
+        service,
+        year: cur.year,
+        month: cur.month,
+        week: targetWeekNum,
+        userId,
+        actingAsRole,
+      });
+      await logActingAsIfOnline(p.localId);
+      onDone(p.localId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to confirm R0.");
+      setBusy(false);
+    }
+  }
+
+  // When the user proceeds: R0 ticked -> confirmation sub-modal; else create directly.
+  function handleProceed() {
+    if (noTithing && canConfirmR0) {
+      setConfirmR0(true);
+      return;
+    }
+    void proceedCreate();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-week-title"
+    >
+      <div className="w-full max-w-md rounded-md border bg-background p-4 shadow-lg space-y-3">
+        <h2 id="new-week-title" className="text-sm font-semibold">
+          New Week — Week {targetWeekNum}
+        </h2>
+
+        {!confirmR0 ? (
+          <>
+            {outstanding.length > 0 && (
+              <div
+                className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800"
+                role="status"
+              >
+                Week{outstanding[0].week} {monthName(outstanding[0].month)} outstanding (
+                {periodStatusLabel(outstanding[0].status)}).
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onDone(outstanding[0].localId)}
+                  >
+                    Go to Outstanding
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {canConfirmR0 && (
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={noTithing}
+                  onChange={(e) => setNoTithing(e.target.checked)}
+                />
+                No tithing this week
+              </label>
+            )}
+
+            {actingAsRole && (
+              <p className="text-[11px] text-muted-foreground">
+                You are acting as Treasurer; this action is logged.
+              </p>
+            )}
+
+            {error && (
+              <p role="alert" className="text-xs text-destructive">
+                {error}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleProceed} disabled={busy}>
+                {busy
+                  ? "Working…"
+                  : outstanding.length > 0
+                  ? `Create Week${targetWeekNum} anyway`
+                  : noTithing && canConfirmR0
+                  ? "Continue — No tithing"
+                  : `Create Week${targetWeekNum}`}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs">
+              Confirm no tithing for Week {targetWeekNum} as R0.00 — will be submitted for
+              audit as R0.00.
+            </p>
+            {error && (
+              <p role="alert" className="text-xs text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setConfirmR0(false)} disabled={busy}>
+                Back
+              </Button>
+              <Button size="sm" onClick={() => void proceedR0()} disabled={busy}>
+                {busy ? "Submitting…" : "Confirm R0.00"}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+function monthName(month: number): string {
+  return MONTH_NAMES[month - 1] ?? String(month);
 }
 
 function KpiCard({ title, children }: { title: string; children: React.ReactNode }) {

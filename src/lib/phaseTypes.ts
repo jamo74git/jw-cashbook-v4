@@ -98,6 +98,40 @@ export interface NewMemberRegister {
   updated_at: string | null;
 }
 
+// ─── Month-level status machine (MVP hardening v5, Decision 2) ────────────────
+// Weeks stop at AuditApproved (UI "Closed"); the month then aggregates up:
+//   Open -> AllWeeksClosed -> MonthSubmittedToOverseer -> SubmittedToHO.
+// SubmittedToHO is MODELED only (no Overseer->HO UI trigger in this scope).
+export const MONTH_STATUSES = [
+  "Open",
+  "AllWeeksClosed",
+  "MonthSubmittedToOverseer",
+  "SubmittedToHO",
+] as const;
+export type MonthStatus = (typeof MONTH_STATUSES)[number];
+
+// ─── Monthly aggregate (MODEL-ONLY; Decision 2 "fields only, no UI") ──────────
+// Shapes a future calendar-year + prior-year comparison. No comparison UI is built
+// in this scope; the Dexie store (schema.ts monthAggregates) simply persists these.
+export interface MonthlyAggregate {
+  id: string; // `${congregationId}|${year}|${month}`
+  congregationId: string;
+  year: number;
+  month: number;
+  membersTotal: number | null;
+  officersTotal: number | null;
+  burialTotal: number | null;
+  expensesTotal: number | null;
+  incomeTotal: number | null;
+  bankedTotal: number | null;
+  weeksClosed: number | null;
+  weeksTotal: number | null;
+  calendarYear: number | null; // future CY comparison anchor
+  priorYearId: string | null; // future PY comparison link
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 // ─── Treasurer/Chair settings columns added additively to congregation_settings ──
 export interface CongregationSettingsExtra {
   hall_capacity: number | null;

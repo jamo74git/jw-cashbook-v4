@@ -11,7 +11,13 @@
 
 import Dexie, { type Table } from "dexie";
 import type { Role, HierarchyLevel, LineSection } from "@/lib/types";
-import type { AttendanceType, CensusBucket, NewMemberType } from "@/lib/phaseTypes";
+import type {
+  AttendanceType,
+  CensusBucket,
+  NewMemberType,
+  MonthStatus,
+  MonthlyAggregate,
+} from "@/lib/phaseTypes";
 
 export type LocalSyncStatus = "pending" | "syncing" | "synced" | "conflict" | "failed";
 
@@ -28,6 +34,22 @@ export type ItemType =
   | "CashBanked"
   | "Burial"
   | "Expense";
+
+// ─── Offline_User_Profile (non-secret display/scope cache; offline-pin-multiuser) ──
+// Holds ONLY non-secret display + scope data, joined to a Cached_Credential by
+// userId. PIN material lives exclusively in `credentials` + crypto.ts (never here).
+export interface OfflineUserProfile {
+  userId: string; // pk; matches CachedCredential.userId
+  email: string;
+  role: Role;
+  displayName: string; // capitalized email prefix
+  initials: string; // first two chars of displayName, uppercased
+  congregationId: string | null;
+  congregationName: string | null; // denormalized; survives a cleared congregations cache
+  scopeLevel: HierarchyLevel;
+  hierarchyId: string | null;
+  lastSyncAt: string; // ISO; refreshed on each online login
+}
 
 // ─── Cached_Credential (offline PIN auth) ────────────────────────────────────
 export interface CachedCredential {
@@ -183,6 +205,22 @@ export interface LocalPeriod {
   updatedAt: string;
   syncAttempts: number;
   lastError: string | null;
+  // ── MVP hardening v5 (additive; optional so pre-existing v2/v3 rows stay valid) ──
+  // R0 "No tithing this week" audit trail (Decisions 4 & 5; R0 RULE).
+  r0ConfirmedBy?: string | null;
+  r0ConfirmedAt?: string | null;
+  r0DeviceId?: string | null;
+  // Chairperson acting-as-Treasurer (Decision 5).
+  actingAsRole?: Role | null;
+  actingAsAuditedAt?: string | null; // set once the ACTING_AS_TREASURER audit row is written
+  // Same-device audit gate (Decision 4; Task 4): syncMeta deviceId at capture time.
+  captureDeviceId?: string | null;
+  // Lifecycle: closedAt set when status -> AuditApproved (UI "Closed").
+  closedAt?: string | null;
+  // Month-level machine (Decision 2) — duplicated across a month's weeks by design.
+  monthStatus?: MonthStatus; // default "Open"
+  monthSubmittedToOverseerAt?: string | null;
+  monthSubmittedBy?: string | null;
 }
 
 // ─── Local line item (mirrors cashbook_line_item + offline proof) ────────────
@@ -213,15 +251,20 @@ export interface LocalLineItem {
 
 // ─── Sync bookkeeping ─────────────────────────────────────────────────────────
 export interface SyncMeta {
-  key: string; // pk, e.g. 'global'
+  key: string; // pk, e.g. 'global' or 'deviceId'
   lastSyncAt: string | null;
   lastReferenceRefreshAt: string | null;
   schemaVersion: number;
+  // Generic string payload for singleton rows keyed by `key` (e.g. the stable
+  // deviceId under key "deviceId"). Independent of the "global" sync-bookkeeping row.
+  value?: string | null;
 }
 
 // ─── Database ────────────────────────────────────────────────────────────────
 export class OacCashbookLocalDB extends Dexie {
   credentials!: Table<CachedCredential, string>;
+  offlineUsers!: Table<OfflineUserProfile, string>;
+  monthAggregates!: Table<MonthlyAggregate, string>;
   congregations!: Table<CongregationLookup, string>;
   hierarchyLevels!: Table<HierarchyLookup, string>;
   officers!: Table<OfficerLookup, string>;
@@ -271,6 +314,15 @@ export class OacCashbookLocalDB extends Dexie {
       censusPriestship: "id, congregation_id, priest_id, last_verified_at",
       attendanceMonthly: "id, congregation_id, year, month, attendance_type",
       newMembersRegister: "id, congregation_id, type, census_bucket, created_at",
+    });
+
+    // v4 — ADD-ONLY (MVP hardening v5): the offline-pin-multiuser profile store and
+    // the model-only monthly aggregate store. No existing store is altered; the new
+    // LocalPeriod fields + SyncMeta.value are non-indexed object fields needing no
+    // upgrade function or data migration.
+    this.version(4).stores({
+      offlineUsers: "userId, lastSyncAt",
+      monthAggregates: "id, congregationId, year, month",
     });
   }
 }

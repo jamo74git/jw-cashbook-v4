@@ -45,6 +45,20 @@ function isServerDownstream(server: PeriodStatus, local: PeriodStatus): boolean 
   return (STATUS_RANK[server] ?? 0) > (STATUS_RANK[local] ?? 0);
 }
 
+// ─── Same-device audit gate (MVP hardening v5, Decision 4 / Task 4) ──────────
+// Audit approval requires the captured record to be SYNCED to Supabase, OR to be on
+// the SAME DEVICE that captured it (compare the stored capture deviceId to the
+// current syncMeta deviceId). If neither, approval is BLOCKED with this exact text.
+export const AUDIT_BLOCK_NOT_SYNCED =
+  "Record not yet synced — connect or use same device as Treasurer capture.";
+
+export function isAuditApprovable(
+  period: Pick<LocalPeriod, "localStatus" | "captureDeviceId">,
+  currentDeviceId: string
+): boolean {
+  return period.localStatus === "synced" || period.captureDeviceId === currentDeviceId;
+}
+
 type SB = ReturnType<typeof createClient>;
 
 export async function syncPending(now: Date = new Date()): Promise<SyncReport> {
@@ -129,6 +143,25 @@ async function reconcilePeriod(supabase: SB, period: LocalPeriod): Promise<Outco
       })
       .eq("id", serverId);
     if (error) throw new Error(error.message);
+
+    // Flush the offline-queued acting-as-Treasurer audit exactly once (Decision 5).
+    if (period.actingAsRole && !period.actingAsAuditedAt) {
+      const auditedAt = new Date().toISOString();
+      await supabase.from("audit_log").insert({
+        user_id: period.capturedByUserId,
+        action_type: "ACTING_AS_TREASURER",
+        entity_type: "cashbook_period",
+        entity_id: serverId,
+        assumed_role: period.actingAsRole,
+        comment: "Chairperson acting as Treasurer (offline capture)",
+        metadata: {
+          acting_as_role: period.actingAsRole,
+          actual_user_id: period.capturedByUserId,
+          timestamp: auditedAt,
+        },
+      });
+      await db.periods.update(period.localId, { actingAsAuditedAt: auditedAt });
+    }
   }
 
   await db.periods.update(period.localId, {

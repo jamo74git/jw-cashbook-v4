@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { resolveAccess } from "@/lib/routeGuard";
 import { getSession } from "@/services/authService";
 import * as capture from "@/db/captureRepo";
 import { getOacWeeks, getCurrentOacWeek, type OacWeek } from "@/lib/oacWeeks";
+import { periodStatusLabel } from "@/lib/statusLabels";
 import { CashbookForm } from "@/components/CashbookForm";
 import type { LocalPeriod, OfficerLookup } from "@/db/schema";
 import type { Role } from "@/lib/types";
@@ -26,6 +28,7 @@ export function CapturePage() {
   const [officers, setOfficers] = useState<OfficerLookup[]>([]);
   const [proofMandatory, setProofMandatory] = useState(false);
   const [period, setPeriod] = useState<LocalPeriod | null>(null);
+  const { periodLocalId } = useParams<{ periodLocalId?: string }>();
 
   // Resolve role + congregation once.
   useEffect(() => {
@@ -47,15 +50,26 @@ export function CapturePage() {
         });
         return;
       }
-      const cur = getCurrentOacWeek();
-      setBase({ year: cur.year, month: cur.month });
-      setWeeks(getOacWeeks(cur.year, cur.month));
-      setWeekKey(cur.weekKey);
+
+      // Open a specific week by its stable local id when routed as /capture/:id,
+      // initialising the month + week + service FROM that period (not the current
+      // week) so the correct period opens. Falls back to the current week otherwise.
+      let initial = getCurrentOacWeek();
+      const targeted = periodLocalId ? await capture.getPeriod(periodLocalId) : undefined;
+      if (targeted) {
+        initial = { year: targeted.year, month: targeted.month, weekKey: targeted.weekKey };
+        setService(targeted.service);
+        setPeriod(targeted);
+      }
+      setBase({ year: initial.year, month: initial.month });
+      setWeeks(getOacWeeks(initial.year, initial.month));
+      setWeekKey(initial.weekKey);
       setOfficers(await capture.listOfficers(congregationId));
       setProofMandatory(await capture.getProofMandatory(congregationId));
       setCtx({ status: "ready", role, congregationId, userId });
     })();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [periodLocalId]);
 
   // Resolve/create the local period whenever week or service changes.
   const resolvePeriod = useCallback(async () => {
@@ -112,7 +126,9 @@ export function CapturePage() {
             <option value="PM">PM</option>
           </select>
           {period && (
-            <span className="rounded bg-muted px-2 py-1 text-[10px] font-medium">{period.status}</span>
+            <span className="rounded bg-muted px-2 py-1 text-[10px] font-medium">
+              {periodStatusLabel(period.status)}
+            </span>
           )}
         </div>
       </div>

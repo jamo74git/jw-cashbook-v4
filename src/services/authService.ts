@@ -9,7 +9,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from "@/lib/supabase/client";
-import { db, type CachedCredential } from "@/db/schema";
+import { db, type CachedCredential, type OfflineUserProfile } from "@/db/schema";
+import type { HierarchyLevel } from "@/lib/types";
 import {
   DEFAULT_PBKDF2_ITERATIONS,
   derivePinHash,
@@ -327,4 +328,92 @@ export async function revalidateOnReconnect(userId?: string): Promise<Revalidati
 // ─── Sign out (Req 15.6) ──────────────────────────────────────────────────────
 export function signOut(): void {
   currentSession = null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE USER PROFILE (offline-pin-multiuser) — NON-SECRET display/scope cache.
+// These touch only the `offlineUsers` store; they NEVER read or write PIN material,
+// so the fail-closed auth + PIN-keyed HMAC invariants are untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Display rule mirrors AppHeader / identity.ts: email prefix with the first char
+// capitalized; initials = first two chars of that, uppercased.
+function deriveDisplayName(email: string): string {
+  const name = email.split("@")[0] || "User";
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/**
+ * Persist (upsert) the current user's non-secret offline profile keyed by userId.
+ * Resolves the congregation name from the cached congregations store (Supabase
+ * fallback when online); falls back to the congregationId string, never blocking.
+ * Returns `firstTimeCached` = whether no row existed BEFORE this upsert (for the
+ * optional first-time confirmation). Per-user write only; stores NO secret field.
+ */
+export async function persistOfflineUserProfile(input: {
+  userId: string;
+  email: string;
+  role: Role;
+  congregationId: string | null;
+  hierarchyId: string | null;
+  scopeLevel: HierarchyLevel;
+}): Promise<{ firstTimeCached: boolean }> {
+  const existing = await db.offlineUsers.get(input.userId);
+  const firstTimeCached = existing == null;
+
+  const displayName = deriveDisplayName(input.email);
+  const initials = displayName.slice(0, 2).toUpperCase();
+
+  let congregationName: string | null = null;
+  if (input.congregationId) {
+    const cached = await db.congregations.get(input.congregationId);
+    if (cached?.name) {
+      congregationName = cached.name;
+    } else if (isOnline()) {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("congregations")
+          .select("name")
+          .eq("id", input.congregationId)
+          .maybeSingle();
+        congregationName = data?.name ?? null;
+      } catch {
+        // Non-fatal: name resolution must never block login.
+      }
+    }
+    // R1.4: fall back to the congregationId when the name cannot be resolved.
+    if (!congregationName) congregationName = input.congregationId;
+  }
+
+  const profile: OfflineUserProfile = {
+    userId: input.userId,
+    email: input.email,
+    role: input.role,
+    displayName,
+    initials,
+    congregationId: input.congregationId,
+    congregationName,
+    scopeLevel: input.scopeLevel,
+    hierarchyId: input.hierarchyId,
+    lastSyncAt: new Date().toISOString(),
+  };
+  await db.offlineUsers.put(profile);
+  return { firstTimeCached };
+}
+
+/**
+ * List offline users that have a USABLE cached credential (R2.7), newest first.
+ * A profile without a matching `credentials` row (e.g. a failed/absent PIN set) is
+ * never offered for unlock. Pure Dexie reads; no crypto, no network.
+ */
+export async function getOfflineUsers(): Promise<OfflineUserProfile[]> {
+  const profiles = await db.offlineUsers.toArray();
+  const usable: OfflineUserProfile[] = [];
+  for (const p of profiles) {
+    const cred = await db.credentials.get(p.userId);
+    if (cred) usable.push(p);
+  }
+  // lastSyncAt is ISO, so lexicographic desc == chronological newest-first.
+  return usable.sort((a, b) => (a.lastSyncAt < b.lastSyncAt ? 1 : -1));
 }

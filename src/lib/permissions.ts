@@ -92,6 +92,14 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "census.manage_view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "-", Treasurer: "V", Secretary: "T" },
   "census.manage_edit": { HO: "-", Apostle: "-", Overseer: "-", Elder: "E", Chairperson: "E", Auditor: "-", Treasurer: "-", Secretary: "-" },
 
+  // ── MVP hardening v5 capture / month capabilities (matrix-driven, additive) ──
+  // R0 "No tithing this week" confirmation — same actors who may capture (mirror
+  // capture.create): Treasurer/Chairperson create, Elder as an audited override.
+  "capture.r0_confirm": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "C", Auditor: "-", Treasurer: "C", Secretary: "-" },
+  // Bulk MONTH submit to Overseer once all weeks are AuditApproved (Decision 2):
+  // Elder authoritative (S); Chairperson fallback override (O, audited).
+  "month.bulk_submit_to_overseer": { HO: "-", Apostle: "-", Overseer: "-", Elder: "S", Chairperson: "O", Auditor: "-", Treasurer: "-", Secretary: "-" },
+
   // ── Admin ───────────────────────────────────────────────────────────────
   "admin.manage_users": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "admin.manage_congregations": { HO: "M", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "-", Auditor: "-", Treasurer: "-", Secretary: "-" },
@@ -116,6 +124,10 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
 // instead of comparing role strings.
 export const CENSUS_VIEW = "census.manage_view";
 export const CENSUS_EDIT = "census.manage_edit";
+
+// MVP hardening v5 capability keys (matrix-driven; no role-string checks in the UI).
+export const CAPTURE_R0_CONFIRM = "capture.r0_confirm";
+export const MONTH_SUBMIT = "month.bulk_submit_to_overseer";
 
 // ─── Core Permission Check Functions ────────────────────────────────────────
 
@@ -229,6 +241,35 @@ export async function logSelfReviewException(params: {
     metadata: {
       override_timestamp: new Date().toISOString(),
       assumed_role: params.assumedRole,
+    },
+  });
+}
+
+/**
+ * Log a Chairperson-assumes-Treasurer action to the audit_log (MVP hardening v5,
+ * Decision 5). Distinct from SELF_REVIEW_EXCEPTION: records the acting-as role, the
+ * actual user id, and a timestamp. Online helper; the offline path is flushed by the
+ * Sync_Engine when the captured period syncs.
+ */
+export async function logActingAsTreasurer(params: {
+  userId: string;
+  entityType: string;
+  entityId: string;
+  comment?: string;
+}): Promise<void> {
+  const supabase = createClient();
+
+  await supabase.from("audit_log").insert({
+    user_id: params.userId,
+    action_type: "ACTING_AS_TREASURER" as AuditActionType,
+    entity_type: params.entityType,
+    entity_id: params.entityId,
+    assumed_role: "Treasurer",
+    comment: params.comment ?? "Chairperson acting as Treasurer",
+    metadata: {
+      acting_as_role: "Treasurer",
+      actual_user_id: params.userId,
+      timestamp: new Date().toISOString(),
     },
   });
 }

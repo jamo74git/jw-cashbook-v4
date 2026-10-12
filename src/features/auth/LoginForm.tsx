@@ -6,13 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Turnstile } from "@/components/Turnstile";
-import type { Role } from "@/lib/types";
+import type { Role, HierarchyLevel } from "@/lib/types";
 
 export interface AuthenticatedContext {
+  userId: string;
   email: string;
   password: string;
   role: Role;
   turnstileToken: string | null;
+  // Scope captured for the offline profile / breadcrumb (offline-pin-multiuser).
+  congregationId: string | null;
+  hierarchyId: string | null;
+  scopeLevel: HierarchyLevel;
+  accessStartDate: string | null;
+  accessEndDate: string | null;
 }
 
 interface LoginFormProps {
@@ -72,7 +79,7 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
     // Step 2: active access record.
     const { data: access, error: accessError } = await supabase
       .from("user_hierarchy_access")
-      .select("role, status, start_date, end_date")
+      .select("role, status, start_date, end_date, congregation_id, hierarchy_id, scope_level")
       .eq("user_id", data.user.id)
       .eq("status", "active")
       .order("created_at", { ascending: true })
@@ -121,7 +128,18 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
 
     // Hand off to the parent for optional PIN setup, or route to the dashboard.
     if (onAuthenticated) {
-      onAuthenticated({ email: email.trim(), password, role, turnstileToken });
+      onAuthenticated({
+        userId: data.user.id,
+        email: email.trim(),
+        password,
+        role,
+        turnstileToken,
+        congregationId: (access.congregation_id as string | null) ?? null,
+        hierarchyId: (access.hierarchy_id as string | null) ?? null,
+        scopeLevel: (access.scope_level as HierarchyLevel) ?? "Congregation",
+        accessStartDate: (access.start_date as string | null) ?? null,
+        accessEndDate: (access.end_date as string | null) ?? null,
+      });
     } else {
       navigate(getDashboardRoute(role));
     }

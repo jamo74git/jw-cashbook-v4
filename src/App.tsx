@@ -111,6 +111,8 @@ export function App() {
             }
           >
             <Route index element={<CapturePage />} />
+            {/* Open a specific week by its stable local id (fixes wrong-week routing). */}
+            <Route path=":periodLocalId" element={<CapturePage />} />
           </Route>
 
           <Route
