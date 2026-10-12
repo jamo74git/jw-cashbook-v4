@@ -296,12 +296,6 @@ function EnablePinModal({
     onSuccess();
   }
 
-  const congLine = who?.congregationName
-    ? `${who.congregationName}${who.congregationNumber ? ` (No: ${who.congregationNumber})` : ""}${
-        who.overseershipName ? ` — Overseership: ${who.overseershipName}` : ""
-      }`
-    : "";
-
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
@@ -319,9 +313,9 @@ function EnablePinModal({
 
         <div className="rounded-md border bg-muted/40 p-2 text-xs">
           <p className="font-medium">
-            Setting offline PIN for: {who?.displayName ?? email} ({email})
+            Set PIN for {who?.displayName ?? email}
+            {who?.congregationName ? ` — ${who.congregationName}` : ""}
           </p>
-          {congLine && <p className="text-muted-foreground">{congLine}</p>}
         </div>
 
         <div className="space-y-2">
