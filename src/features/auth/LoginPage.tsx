@@ -185,23 +185,13 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
     <form onSubmit={submit} className="space-y-3">
       <div className="rounded-md border bg-muted/40 p-2 text-xs">
         <p className="font-medium">
-          Setting offline PIN for: {who?.displayName ?? ctx.email} ({who?.email ?? ctx.email})
+          Setting PIN for: {who?.displayName ?? ctx.email.split("@")[0]}
+          {who?.congregationName ? ` — ${who.congregationName}` : ""}
         </p>
-        {who?.congregationName && (
-          <p className="text-muted-foreground">
-            {who.congregationName}
-            {who.congregationNumber ? ` (No: ${who.congregationNumber})` : ""}
-            {who.overseershipName ? ` — Overseership: ${who.overseershipName}` : ""}
-          </p>
-        )}
       </div>
       <p className="text-sm text-muted-foreground">
         Set an offline PIN so you can capture without a connection.
       </p>
-      <div className="space-y-2">
-        <Label htmlFor="pin-email">Email</Label>
-        <Input id="pin-email" type="email" value={who?.email ?? ctx.email} disabled />
-      </div>
       <div className="space-y-2">
         <Label htmlFor="pin">New PIN</Label>
         <Input id="pin" type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value)} />
