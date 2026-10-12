@@ -6,7 +6,15 @@ import { createClient } from "@/lib/supabase/client";
 import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
 import { resolveHierarchyChain, type ChainSegment } from "@/lib/hierarchyChain";
 import { setOfflinePinDismissed } from "@/lib/deviceId";
-import { signOut as clearOfflineSession, hasPin, removePin } from "@/services/authService";
+import {
+  signOut as clearOfflineSession,
+  hasPin,
+  removePin,
+  activateOffline,
+} from "@/services/authService";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
 export function AppHeader() {
@@ -16,6 +24,8 @@ export function AppHeader() {
   const [chain, setChain] = useState<ChainSegment[]>([]);
   const [districtName, setDistrictName] = useState("");
   const [userHasPin, setUserHasPin] = useState(false);
+  const [pinModal, setPinModal] = useState<null | "set" | "change">(null);
+  const [pinToast, setPinToast] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -70,27 +80,29 @@ export function AppHeader() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  // Auto-dismiss the lightweight PIN toast (matches the app-wide banner pattern).
+  useEffect(() => {
+    if (!pinToast) return;
+    const t = setTimeout(() => setPinToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [pinToast]);
+
   async function handleSignOut() {
     clearOfflineSession();
     await supabase.auth.signOut();
     navigate("/login");
   }
 
-  // Enable / Change both route to the sign-in form to (re)derive the PIN credential
-  // from the password (never cached). They do NOT sign out — the Supabase session is
-  // preserved; Change first clears the existing credential so the setup prompt shows.
+  // Enable / Change open the INLINE PIN modal in dashboard context (no /login
+  // redirect, no signOut). The modal collects the current password + new PIN and
+  // calls activateOffline directly, keeping the Supabase session active.
   function handleEnablePin() {
     setShowMenu(false);
-    if (identity?.userId) setOfflinePinDismissed(identity.userId, false);
-    navigate("/login");
+    setPinModal("set");
   }
-  async function handleChangePin() {
+  function handleChangePin() {
     setShowMenu(false);
-    if (!identity?.userId) return;
-    setOfflinePinDismissed(identity.userId, false);
-    await removePin(identity.userId);
-    setUserHasPin(false);
-    navigate("/login");
+    setPinModal("change");
   }
   async function handleRemovePin() {
     setShowMenu(false);
@@ -98,6 +110,7 @@ export function AppHeader() {
     await removePin(identity.userId);
     setOfflinePinDismissed(identity.userId, true);
     setUserHasPin(false);
+    setPinToast(`Offline PIN removed for ${identity.email}`);
   }
 
   const displayName = identity?.displayName ?? "";
@@ -198,6 +211,172 @@ export function AppHeader() {
           </div>
         </div>
       </div>
+
+      {pinToast && (
+        <div
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-primary text-primary-foreground px-4 py-2 rounded-md text-xs shadow-lg"
+          role="status"
+        >
+          {pinToast}
+        </div>
+      )}
+
+      {pinModal && identity && (
+        <EnablePinModal
+          email={identity.email}
+          mode={pinModal}
+          onClose={() => setPinModal(null)}
+          onSuccess={() => {
+            const m = pinModal;
+            setPinModal(null);
+            setUserHasPin(true);
+            if (identity.userId) setOfflinePinDismissed(identity.userId, false);
+            setPinToast(
+              `Offline PIN ${m === "change" ? "updated" : "enabled"} for ${identity.email}`
+            );
+          }}
+        />
+      )}
     </header>
+  );
+}
+
+const MIN_PIN_LENGTH = 4;
+
+// Inline offline-PIN setup/change modal shown IN the dashboard (not the login page).
+// It confirms the signed-in user's current password and a new PIN, then calls
+// activateOffline directly — the Supabase session is preserved (no signOut, no
+// redirect to the generic login form). Context is sourced from getCurrentIdentity().
+function EnablePinModal({
+  email,
+  mode,
+  onClose,
+  onSuccess,
+}: {
+  email: string;
+  mode: "set" | "change";
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [who, setWho] = useState<CurrentIdentity | null>(null);
+  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getCurrentIdentity()
+      .then(setWho)
+      .catch(() => setWho(null));
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!password) {
+      setError("Enter your current password to confirm.");
+      return;
+    }
+    if (pin.length < MIN_PIN_LENGTH) {
+      setError(`PIN must be at least ${MIN_PIN_LENGTH} digits.`);
+      return;
+    }
+    if (pin !== confirm) {
+      setError("PINs do not match.");
+      return;
+    }
+    setBusy(true);
+    const res = await activateOffline({ email, password, pin });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.message);
+      return;
+    }
+    onSuccess();
+  }
+
+  const congLine = who?.congregationName
+    ? `${who.congregationName}${who.congregationNumber ? ` (No: ${who.congregationNumber})` : ""}${
+        who.overseershipName ? ` — Overseership: ${who.overseershipName}` : ""
+      }`
+    : "";
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="enable-pin-title"
+    >
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm space-y-3 rounded-md border bg-background p-4 shadow-lg"
+      >
+        <h2 id="enable-pin-title" className="text-sm font-semibold">
+          {mode === "change" ? "Change offline PIN" : "Enable offline mode"}
+        </h2>
+
+        <div className="rounded-md border bg-muted/40 p-2 text-xs">
+          <p className="font-medium">
+            Setting offline PIN for: {who?.displayName ?? email} ({email})
+          </p>
+          {congLine && <p className="text-muted-foreground">{congLine}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="enable-pin-email">Email</Label>
+          <Input id="enable-pin-email" type="email" value={email} disabled />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="enable-pin-password">Confirm current password</Label>
+          <Input
+            id="enable-pin-password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="enable-pin-new">New PIN</Label>
+          <Input
+            id="enable-pin-new"
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="enable-pin-confirm">Confirm PIN</Label>
+          <Input
+            id="enable-pin-confirm"
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
+        </div>
+
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" size="sm" disabled={busy}>
+            {busy ? "Saving…" : mode === "change" ? "Update PIN" : "Enable"}
+          </Button>
+        </div>
+      </form>
+    </div>
   );
 }

@@ -199,6 +199,10 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
         Set an offline PIN so you can capture without a connection.
       </p>
       <div className="space-y-2">
+        <Label htmlFor="pin-email">Email</Label>
+        <Input id="pin-email" type="email" value={who?.email ?? ctx.email} disabled />
+      </div>
+      <div className="space-y-2">
         <Label htmlFor="pin">New PIN</Label>
         <Input id="pin" type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value)} />
       </div>
