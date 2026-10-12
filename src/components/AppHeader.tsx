@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
 import { resolveHierarchyChain, type ChainSegment } from "@/lib/hierarchyChain";
 import { setOfflinePinDismissed } from "@/lib/deviceId";
-import { signOut as clearOfflineSession } from "@/services/authService";
+import { signOut as clearOfflineSession, hasPin, removePin } from "@/services/authService";
 import { Badge } from "@/components/ui/badge";
 
 export function AppHeader() {
@@ -15,6 +15,7 @@ export function AppHeader() {
   const [identity, setIdentity] = useState<CurrentIdentity | null>(null);
   const [chain, setChain] = useState<ChainSegment[]>([]);
   const [districtName, setDistrictName] = useState("");
+  const [userHasPin, setUserHasPin] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -24,6 +25,10 @@ export function AppHeader() {
       const id = await getCurrentIdentity();
       if (!id) return;
       setIdentity(id);
+
+      // Whether this user already has an offline PIN on this device (drives the
+      // Settings-menu label: Set vs Change/Remove).
+      setUserHasPin(await hasPin(id.userId));
 
       // Full canonical breadcrumb for ALL roles (cache-first, graceful fallback).
       const segs = await resolveHierarchyChain({
@@ -69,6 +74,30 @@ export function AppHeader() {
     clearOfflineSession();
     await supabase.auth.signOut();
     navigate("/login");
+  }
+
+  // Enable / Change both route to the sign-in form to (re)derive the PIN credential
+  // from the password (never cached). They do NOT sign out — the Supabase session is
+  // preserved; Change first clears the existing credential so the setup prompt shows.
+  function handleEnablePin() {
+    setShowMenu(false);
+    if (identity?.userId) setOfflinePinDismissed(identity.userId, false);
+    navigate("/login");
+  }
+  async function handleChangePin() {
+    setShowMenu(false);
+    if (!identity?.userId) return;
+    setOfflinePinDismissed(identity.userId, false);
+    await removePin(identity.userId);
+    setUserHasPin(false);
+    navigate("/login");
+  }
+  async function handleRemovePin() {
+    setShowMenu(false);
+    if (!identity?.userId) return;
+    await removePin(identity.userId);
+    setOfflinePinDismissed(identity.userId, true);
+    setUserHasPin(false);
   }
 
   const displayName = identity?.displayName ?? "";
@@ -134,20 +163,33 @@ export function AppHeader() {
                 <button onClick={() => { setShowMenu(false); navigate("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings
                 </button>
-                {identity?.isOnline && (
-                  <button
-                    onClick={() => {
-                      setShowMenu(false);
-                      // Clear any "don't ask again" dismissal and re-run the online
-                      // sign-in so the offline-PIN setup prompt appears again.
-                      if (identity.userId) setOfflinePinDismissed(identity.userId, false);
-                      navigate("/login");
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted"
-                  >
-                    Enable offline mode (Set PIN)
-                  </button>
-                )}
+                {identity?.isOnline &&
+                  (userHasPin ? (
+                    <div className="border-t">
+                      <p className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                        Offline PIN
+                      </p>
+                      <button
+                        onClick={handleChangePin}
+                        className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted"
+                      >
+                        Change
+                      </button>
+                      <button
+                        onClick={handleRemovePin}
+                        className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleEnablePin}
+                      className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted"
+                    >
+                      Enable offline mode (Set PIN)
+                    </button>
+                  ))}
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">
                   Sign Out
                 </button>

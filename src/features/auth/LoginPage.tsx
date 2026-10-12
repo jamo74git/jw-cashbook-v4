@@ -9,6 +9,7 @@ import {
   getOfflineUsers,
 } from "@/services/authService";
 import { autoRefreshReferenceCache } from "@/utils/cacheLoader";
+import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
 import { isOfflinePinDismissed, setOfflinePinDismissed } from "@/lib/deviceId";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { LoginForm, type AuthenticatedContext } from "@/features/auth/LoginForm";
@@ -137,6 +138,15 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dontAsk, setDontAsk] = useState(false);
+  const [who, setWho] = useState<CurrentIdentity | null>(null);
+
+  // Resolve the signed-in user's display context (name + congregation + number)
+  // for the modal header. Stays in the current online session — no re-login.
+  useEffect(() => {
+    getCurrentIdentity()
+      .then(setWho)
+      .catch(() => setWho(null));
+  }, []);
 
   // Skip = "Remind me later" (no flag). With the checkbox ticked, persist the
   // per-device dismissal so this user is not prompted again on this device.
@@ -173,6 +183,18 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
 
   return (
     <form onSubmit={submit} className="space-y-3">
+      <div className="rounded-md border bg-muted/40 p-2 text-xs">
+        <p className="font-medium">
+          Setting offline PIN for: {who?.displayName ?? ctx.email} ({who?.email ?? ctx.email})
+        </p>
+        {who?.congregationName && (
+          <p className="text-muted-foreground">
+            {who.congregationName}
+            {who.congregationNumber ? ` (No: ${who.congregationNumber})` : ""}
+            {who.overseershipName ? ` — Overseership: ${who.overseershipName}` : ""}
+          </p>
+        )}
+      </div>
       <p className="text-sm text-muted-foreground">
         Set an offline PIN so you can capture without a connection.
       </p>

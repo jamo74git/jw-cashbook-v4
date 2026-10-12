@@ -59,7 +59,18 @@ export function AccountPicker({ users, onSelect, onUsePassword, onRemove }: Acco
                 {u.initials}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{u.email}</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-medium">{u.email}</span>
+                  {/* Every listed account is credential-backed (offline-ready); the
+                      check confirms an offline PIN is set on this device. */}
+                  <span
+                    className="shrink-0 rounded-sm bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-700"
+                    title="Offline PIN set"
+                    aria-label="Offline PIN set"
+                  >
+                    ✓ PIN
+                  </span>
+                </span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {u.congregationName ?? "No congregation"} · Last synced {relativeTime(u.lastSyncAt)}
                 </span>

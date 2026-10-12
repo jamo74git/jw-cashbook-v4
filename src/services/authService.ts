@@ -417,3 +417,18 @@ export async function getOfflineUsers(): Promise<OfflineUserProfile[]> {
   // lastSyncAt is ISO, so lexicographic desc == chronological newest-first.
   return usable.sort((a, b) => (a.lastSyncAt < b.lastSyncAt ? 1 : -1));
 }
+
+/** True when an offline PIN credential exists for this user on this device. */
+export async function hasPin(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  return (await db.credentials.get(userId)) != null;
+}
+
+/**
+ * Remove this user's offline PIN credential from this device (Change/Remove).
+ * Deletes only the secret credential; the non-secret offline profile is left intact.
+ */
+export async function removePin(userId: string): Promise<void> {
+  if (!userId) return;
+  await db.credentials.delete(userId);
+}
