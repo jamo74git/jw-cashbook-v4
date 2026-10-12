@@ -24,6 +24,22 @@ import type { LocalPeriod } from "@/db/schema";
 
 const money = (n: number): string => `R${n.toFixed(2)}`;
 
+// Role-specific dashboard title (removes "who is signed in" confusion even when the
+// view is shared). Label mapping only — not a permission check.
+const DASHBOARD_TITLES: Partial<Record<Role, string>> = {
+  HO: "Head Office Dashboard",
+  Apostle: "Apostle Dashboard",
+  Overseer: "Overseer Dashboard",
+  Elder: "Elder Dashboard",
+  Chairperson: "Chairperson Dashboard",
+  Treasurer: "Treasurer Dashboard",
+  Auditor: "Auditor Dashboard",
+  Secretary: "Secretary Dashboard",
+};
+function dashboardTitle(role: Role): string {
+  return DASHBOARD_TITLES[role] ?? `${role} Dashboard`;
+}
+
 // Section selectors (Capture first, Census LAST). The three non-Capture panels are
 // Phase B–D placeholders; each maps to a treasurer flag on congregation_settings.
 type FlagKey = keyof Pick<
@@ -124,7 +140,7 @@ export function TreasurerDashboard() {
 
   return (
     <main className="max-w-5xl mx-auto p-4 space-y-4">
-      <h1 className="text-lg font-bold">Dashboard</h1>
+      <h1 className="text-lg font-bold">{dashboardTitle(readyCtx.role)}</h1>
 
       {/* Top selectors — Capture first, Census last. */}
       <div className="flex flex-wrap gap-2">

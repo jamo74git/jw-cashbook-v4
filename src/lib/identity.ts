@@ -24,10 +24,35 @@ export interface CurrentIdentity {
   initials: string;
   congregationId: string | null;
   congregationName: string | null;
+  congregationNumber: string | null; // CongregationLookup.code, e.g. "123" for "(No: 123)"
+  overseershipName: string | null; // immediate parent Overseership name for the concise header
   scopeLevel: HierarchyLevel;
   hierarchyId: string | null;
   scopeCount: number;
   isOnline: boolean;
+}
+
+/**
+ * Resolve the concise-header extras from the cached stores (works offline): the
+ * congregation NUMBER (CongregationLookup.code) and the immediate parent Overseership
+ * name. Never throws; returns nulls when the reference cache is not populated.
+ */
+async function resolveCongregationExtras(
+  congregationId: string | null
+): Promise<{ congregationNumber: string | null; overseershipName: string | null }> {
+  if (!congregationId) return { congregationNumber: null, overseershipName: null };
+  try {
+    const cong = await db.congregations.get(congregationId);
+    const congregationNumber = cong?.code ?? null;
+    let overseershipName: string | null = null;
+    if (cong?.overseership_id) {
+      const node = await db.hierarchyLevels.get(cong.overseership_id);
+      overseershipName = node?.name ?? null;
+    }
+    return { congregationNumber, overseershipName };
+  } catch {
+    return { congregationNumber: null, overseershipName: null };
+  }
 }
 
 function isOnline(): boolean {
@@ -104,6 +129,7 @@ export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
     // persisted profile; fall back to a minimal (non-blank) identity from the session.
     const displayName = profile?.displayName ?? "User";
     const initials = profile?.initials ?? deriveInitials(displayName);
+    const extras = await resolveCongregationExtras(congregationId);
 
     return {
       userId: session.userId,
@@ -113,6 +139,8 @@ export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
       initials,
       congregationId,
       congregationName: profile?.congregationName ?? null,
+      congregationNumber: extras.congregationNumber,
+      overseershipName: extras.overseershipName,
       scopeLevel,
       hierarchyId,
       scopeCount,
@@ -134,9 +162,10 @@ export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
   const hierarchyId = access.hierarchy_id ?? null;
   const scopeLevel = access.scope_level;
 
-  const [congregationName, scopeCount] = await Promise.all([
+  const [congregationName, scopeCount, extras] = await Promise.all([
     resolveCongregationNameOnline(congregationId),
     computeScopeCount({ scopeLevel, hierarchyId, congregationId }),
+    resolveCongregationExtras(congregationId),
   ]);
 
   return {
@@ -147,6 +176,8 @@ export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
     initials: deriveInitials(displayName),
     congregationId,
     congregationName,
+    congregationNumber: extras.congregationNumber,
+    overseershipName: extras.overseershipName,
     scopeLevel,
     hierarchyId,
     scopeCount,

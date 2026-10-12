@@ -9,6 +9,7 @@ import {
   getOfflineUsers,
 } from "@/services/authService";
 import { autoRefreshReferenceCache } from "@/utils/cacheLoader";
+import { isOfflinePinDismissed, setOfflinePinDismissed } from "@/lib/deviceId";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { LoginForm, type AuthenticatedContext } from "@/features/auth/LoginForm";
 import { AccountPicker } from "@/features/auth/AccountPicker";
@@ -72,8 +73,22 @@ export function LoginPage() {
       navigate(getDashboardRoute(ctx.role));
       return;
     }
+    // Respect a per-device "Don't ask again" dismissal: don't nag on every sign-in.
+    if (isOfflinePinDismissed(ctx.userId)) {
+      navigate(getDashboardRoute(ctx.role));
+      return;
+    }
     setAuthCtx(ctx);
     setMode("pin-setup");
+  }
+
+  // Remove a user's offline access from this device (Offline PIN: Remove).
+  async function handleRemoveOfflineUser(userId: string) {
+    await db.credentials.delete(userId);
+    await db.offlineUsers.delete(userId);
+    const users = await getOfflineUsers();
+    setOfflineUsers(users);
+    if (users.length === 0) setMode("password");
   }
 
   if (mode === "loading") {
@@ -100,6 +115,7 @@ export function LoginPage() {
               setMode("pin-unlock");
             }}
             onUsePassword={() => setMode("password")}
+            onRemove={handleRemoveOfflineUser}
           />
         )}
         {mode === "pin-unlock" && (
@@ -120,6 +136,14 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dontAsk, setDontAsk] = useState(false);
+
+  // Skip = "Remind me later" (no flag). With the checkbox ticked, persist the
+  // per-device dismissal so this user is not prompted again on this device.
+  function handleSkip() {
+    if (dontAsk) setOfflinePinDismissed(ctx.userId, true);
+    onDone(ctx.role);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -161,11 +185,19 @@ function PinSetup({ ctx, onDone }: { ctx: AuthenticatedContext; onDone: (role: R
         <Input id="pin-confirm" type="password" inputMode="numeric" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
       </div>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={dontAsk}
+          onChange={(e) => setDontAsk(e.target.checked)}
+        />
+        Don&apos;t ask again for this device
+      </label>
       <div className="flex gap-2">
         <Button type="submit" className="flex-1" disabled={busy}>
           {busy ? "Saving…" : "Set PIN"}
         </Button>
-        <Button type="button" variant="outline" onClick={() => onDone(ctx.role)}>
+        <Button type="button" variant="outline" onClick={handleSkip}>
           Skip
         </Button>
       </div>

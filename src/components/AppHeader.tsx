@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { createClient } from "@/lib/supabase/client";
 import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
 import { resolveHierarchyChain, type ChainSegment } from "@/lib/hierarchyChain";
+import { setOfflinePinDismissed } from "@/lib/deviceId";
 import { signOut as clearOfflineSession } from "@/services/authService";
 import { Badge } from "@/components/ui/badge";
 
@@ -72,8 +73,17 @@ export function AppHeader() {
 
   const displayName = identity?.displayName ?? "";
   const initials = identity?.initials ?? displayName.slice(0, 2).toUpperCase();
-  // Canonical breadcrumb (Conference/COA | Apostolate | … | Congregation).
+  // Canonical breadcrumb retained as the fallback for non-congregation scopes
+  // (Overseer / Apostle / District).
   const breadcrumb = chain.map((s) => s.name).join(" | ");
+  const scopeCount = identity?.scopeCount ?? 0;
+  // Concise congregation identity: "Bosmont (No: 123) — Overseership: Beukes".
+  // Pieces that don't resolve (number/overseership) are omitted gracefully.
+  const congLine = identity?.congregationName
+    ? `${identity.congregationName}${
+        identity.congregationNumber ? ` (No: ${identity.congregationNumber})` : ""
+      }${identity.overseershipName ? ` — Overseership: ${identity.overseershipName}` : ""}`
+    : "";
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background shadow-sm">
@@ -91,13 +101,20 @@ export function AppHeader() {
             <span className="text-muted-foreground">|</span>
             <span>Role: <b>{identity?.role}</b></span>
             <span className="text-muted-foreground">|</span>
-            {breadcrumb ? (
-              <span className="truncate max-w-[640px]" title={breadcrumb}>{breadcrumb}</span>
+            {identity?.congregationId && congLine ? (
+              <span className="truncate max-w-[640px]" title={congLine}>
+                {congLine}
+                {scopeCount > 1 && (
+                  <span className="text-muted-foreground"> · current of {scopeCount}</span>
+                )}
+              </span>
             ) : identity?.role === "HO" && districtName ? (
               <span>District: <b>{districtName}</b></span>
+            ) : breadcrumb ? (
+              <span className="truncate max-w-[640px]" title={breadcrumb}>{breadcrumb}</span>
             ) : (
               <span>
-                Scope: <b>{identity?.scopeCount ?? 0} Congregation{(identity?.scopeCount ?? 0) !== 1 ? "s" : ""}</b>
+                Scope: <b>{scopeCount} Congregation{scopeCount !== 1 ? "s" : ""}</b>
               </span>
             )}
           </div>
@@ -117,6 +134,20 @@ export function AppHeader() {
                 <button onClick={() => { setShowMenu(false); navigate("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings
                 </button>
+                {identity?.isOnline && (
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      // Clear any "don't ask again" dismissal and re-run the online
+                      // sign-in so the offline-PIN setup prompt appears again.
+                      if (identity.userId) setOfflinePinDismissed(identity.userId, false);
+                      navigate("/login");
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted"
+                  >
+                    Enable offline mode (Set PIN)
+                  </button>
+                )}
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">
                   Sign Out
                 </button>

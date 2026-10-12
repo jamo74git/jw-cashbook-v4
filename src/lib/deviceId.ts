@@ -24,3 +24,40 @@ export async function getOrCreateDeviceId(): Promise<string> {
   });
   return id;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE-PIN "DON'T ASK AGAIN" DISMISSAL (GAP A)
+// Per-user, per-device preference persisted in localStorage so a user who skipped
+// offline-PIN setup with "Don't ask again for this device" is not nagged on every
+// sign-in. Device scoping is implicit: localStorage is per browser/device. Guarded
+// for non-browser (test/SSR) environments so it never throws.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const OFFLINE_PIN_DISMISSED_PREFIX = "oac_offline_pin_dismissed_";
+
+/** True when this user has dismissed offline-PIN setup on this device. */
+export function isOfflinePinDismissed(userId: string): boolean {
+  if (!userId) return false;
+  try {
+    if (typeof localStorage === "undefined") return false;
+    return localStorage.getItem(OFFLINE_PIN_DISMISSED_PREFIX + userId) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Set/clear the per-user dismissal flag. `true` = "Don't ask again for this device";
+ * `false` = remind again / re-enable. A plain Skip never calls this (remind later).
+ */
+export function setOfflinePinDismissed(userId: string, dismissed: boolean): void {
+  if (!userId) return;
+  try {
+    if (typeof localStorage === "undefined") return;
+    const key = OFFLINE_PIN_DISMISSED_PREFIX + userId;
+    if (dismissed) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable (private mode / quota) — treat as non-dismissed.
+  }
+}

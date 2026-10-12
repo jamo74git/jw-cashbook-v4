@@ -62,6 +62,11 @@ import {
 import { getCurrentIdentity, computeScopeCount } from "@/lib/identity";
 import { db, type CongregationLookup } from "@/db/schema";
 import type { Role } from "@/lib/types";
+import {
+  isOfflinePinDismissed,
+  setOfflinePinDismissed,
+  OFFLINE_PIN_DISMISSED_PREFIX,
+} from "@/lib/deviceId";
 
 const LOW_ITERS = 1000;
 const FAR_PAST = "2000-01-01T00:00:00.000Z";
@@ -293,5 +298,54 @@ describe("offline-pin-multiuser (Task 9 — properties)", () => {
     // Fail-closed: no session offline -> null (never a populated-but-wrong identity).
     signOut();
     expect(await getCurrentIdentity()).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAP A — dismissible offline-PIN setup ("Don't ask again for this device")
+// The setup modal must stop nagging on every sign-in once a user ticks the
+// per-device dismissal; a plain Skip (no tick) does not persist anything.
+// localStorage is absent under node, so stub an in-memory implementation.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("offline-pin dismissal (GAP A)", () => {
+  function fakeLocalStorage(): Storage {
+    const store = new Map<string, string>();
+    return {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      get length() {
+        return store.size;
+      },
+    } as Storage;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", fakeLocalStorage());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to not-dismissed and persists 'don't ask again' per user on this device", () => {
+    expect(isOfflinePinDismissed("userA")).toBe(false);
+
+    setOfflinePinDismissed("userA", true);
+    expect(isOfflinePinDismissed("userA")).toBe(true);
+    expect(localStorage.getItem(OFFLINE_PIN_DISMISSED_PREFIX + "userA")).toBe("1");
+
+    // Isolation: a plain Skip (no flag) for another user stays promptable.
+    expect(isOfflinePinDismissed("userB")).toBe(false);
+  });
+
+  it("clearing the dismissal (remind me later / re-enable) affects only that user", () => {
+    setOfflinePinDismissed("userA", true);
+    setOfflinePinDismissed("userB", true);
+
+    setOfflinePinDismissed("userA", false);
+    expect(isOfflinePinDismissed("userA")).toBe(false);
+    expect(isOfflinePinDismissed("userB")).toBe(true);
   });
 });

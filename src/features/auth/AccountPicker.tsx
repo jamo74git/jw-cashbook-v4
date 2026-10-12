@@ -8,6 +8,8 @@ interface AccountPickerProps {
   onSelect: (userId: string) => void;
   /** Route back to the online password form ("Sign in online instead"). */
   onUsePassword: () => void;
+  /** Remove a user's offline access (Offline PIN: Remove) from this device. */
+  onRemove?: (userId: string) => void;
 }
 
 /** Compact "x ago" relative time for the last-synced hint; falls back to a date. */
@@ -34,7 +36,7 @@ function relativeTime(iso: string): string {
  * which drives the per-user PIN unlock. The parent is responsible for passing only users
  * with a usable credential (R2.7).
  */
-export function AccountPicker({ users, onSelect, onUsePassword }: AccountPickerProps) {
+export function AccountPicker({ users, onSelect, onUsePassword, onRemove }: AccountPickerProps) {
   return (
     <div className="space-y-3" aria-labelledby="account-picker-heading">
       <h2 id="account-picker-heading" className="text-sm font-semibold">
@@ -43,11 +45,11 @@ export function AccountPicker({ users, onSelect, onUsePassword }: AccountPickerP
 
       <ul className="space-y-2" aria-label="Offline accounts">
         {users.map((u) => (
-          <li key={u.userId}>
+          <li key={u.userId} className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => onSelect(u.userId)}
-              className="flex w-full items-center gap-3 rounded-md border p-2 text-left hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
+              className="flex min-w-0 flex-1 items-center gap-3 rounded-md border p-2 text-left hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
               aria-label={`Unlock ${u.email}${u.congregationName ? ` — ${u.congregationName}` : ""}`}
             >
               <span
@@ -63,18 +65,35 @@ export function AccountPicker({ users, onSelect, onUsePassword }: AccountPickerP
                 </span>
               </span>
             </button>
+            {onRemove && (
+              <button
+                type="button"
+                onClick={() => onRemove(u.userId)}
+                className="shrink-0 rounded-sm px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-destructive focus:outline-none focus:ring-2 focus:ring-ring"
+                aria-label={`Remove offline access for ${u.email}`}
+                title="Remove offline access on this device"
+              >
+                Remove
+              </button>
+            )}
           </li>
         ))}
       </ul>
+
+      {/* Offline PIN management: Set / Change require an online sign-in (the password
+          flow re-activates offline access); Remove is the per-account action above. */}
+      <p className="text-[11px] text-muted-foreground">
+        Offline PIN: Set / Change by signing in online · Remove per account above.
+      </p>
 
       <Button
         type="button"
         variant="ghost"
         className="w-full text-xs"
         onClick={onUsePassword}
-        aria-label="Sign in online with your password instead"
+        aria-label="Sign in online to set or change your offline PIN"
       >
-        Sign in online instead
+        Enable offline mode / Sign in online instead
       </Button>
     </div>
   );
