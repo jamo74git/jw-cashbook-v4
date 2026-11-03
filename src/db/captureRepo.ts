@@ -15,7 +15,8 @@ import {
 import type { Role, LineSection } from "@/lib/types";
 import type { MonthStatus } from "@/lib/phaseTypes";
 import { getOrCreateDeviceId } from "@/lib/deviceId";
-import { getCurrentOacWeek } from "@/lib/oacWeeks";
+import { getCurrentOacWeek, isFutureOacService } from "@/lib/oacWeeks";
+import { isFutureDate } from "@/lib/captureTotals";
 
 export type TabKey = "Members" | "Officers" | "Burial" | "Expenses" | "Banking";
 
@@ -45,6 +46,11 @@ export async function getOrCreateLocalPeriod(input: NewPeriodInput): Promise<Loc
   const naturalKey = naturalKeyOf(input.congregationId, input.weekKey, input.service);
   const existing = await db.periods.where("naturalKey").equals(naturalKey).first();
   if (existing) return existing;
+  // Task 2: block CREATING a new future-dated period (existing records are returned above, so an
+  // existing future test period is preserved). Current + historical (catch-up) capture is allowed.
+  if (isFutureOacService(input.year, input.month, input.week)) {
+    throw new Error("Cannot capture a future service date. Select the current or a past week.");
+  }
 
   const ts = now();
   const deviceId = await getOrCreateDeviceId();
@@ -104,7 +110,11 @@ export function isPeriodEditable(period: Pick<LocalPeriod, "status">): boolean {
 }
 
 async function touchPeriod(periodLocalId: string): Promise<void> {
-  await db.periods.update(periodLocalId, { updatedAt: now() });
+  // Task 1: a local change re-queues a previously-synced period for the next sync pass so the
+  // edit is reconciled (never silently stranded). Does not disturb conflict/failed/syncing.
+  const p = await db.periods.get(periodLocalId);
+  const requeue = p && p.localStatus === "synced" ? { localStatus: "pending" as const } : {};
+  await db.periods.update(periodLocalId, { updatedAt: now(), ...requeue });
 }
 
 export async function setPeriodStatus(periodLocalId: string, status: PeriodStatus): Promise<void> {
@@ -123,6 +133,11 @@ export async function submitPeriod(
     actingAsRole?: Role | null;
   }
 ): Promise<void> {
+  // Task 2: never submit a future-dated service.
+  const _fp = await db.periods.get(periodLocalId);
+  if (_fp && isFutureOacService(_fp.year, _fp.month, _fp.week)) {
+    throw new Error("Cannot submit a future-dated service.");
+  }
   await db.periods.update(periodLocalId, {
     status: "Submitted",
     submittedAt: now(),
@@ -302,6 +317,12 @@ export async function addLineItem(
       item_type === "EFT" || item_type === "DirectDebit" ? input.transaction_date ?? null : TODAY();
   }
 
+  // Task 1: EFT/DD transaction date may not be in the future (device-local date). Earlier dates
+  // (incl. capturing an earlier week today) are allowed. Cash/deposit-slip dates are unaffected.
+  if ((item_type === "EFT" || item_type === "DirectDebit") && isFutureDate(transaction_date)) {
+    throw new Error("Transaction date cannot be in the future.");
+  }
+
   const item: LocalLineItem = {
     localId,
     periodLocalId,
@@ -330,7 +351,18 @@ export async function addLineItem(
 }
 
 export async function updateLineItem(localId: string, changes: Partial<LocalLineItem>): Promise<void> {
-  await db.lineItems.update(localId, changes);
+  // Task 1: reject a future EFT/DD transaction date at the data layer (backs up the UI check).
+  if (changes.transaction_date !== undefined) {
+    const existing = await db.lineItems.get(localId);
+    const t = (changes.item_type ?? existing?.item_type) as string | undefined;
+    if ((t === "EFT" || t === "DirectDebit") && isFutureDate(changes.transaction_date)) {
+      throw new Error("Transaction date cannot be in the future.");
+    }
+  }
+  // editing a line item marks it unacknowledged (pending) so a serverId alone can never be
+  // mistaken for "the current version was synced". Callers may override explicitly.
+  const next = "localStatus" in changes ? changes : { ...changes, localStatus: "pending" as const };
+  await db.lineItems.update(localId, next);
   const item = await db.lineItems.get(localId);
   if (item) await touchPeriod(item.periodLocalId);
 }
@@ -339,7 +371,7 @@ export async function updateLineItem(localId: string, changes: Partial<LocalLine
 export async function setIncomeType(localId: string, type: ItemType): Promise<void> {
   const changes: Partial<LocalLineItem> =
     type === "Cash"
-      ? { item_type: type, payment_type: type, item_count: null, proof_status: null, proofBlob: null, proofFileName: null }
+      ? { item_type: type, payment_type: type, item_count: null, proof_status: null, proofBlob: null, proofFileName: null, proofObjectKey: null, proofHash: null, proofSize: null }
       : { item_type: type, payment_type: type };
   await updateLineItem(localId, changes);
 }
@@ -372,45 +404,83 @@ export function tabItems(items: LocalLineItem[], tab: TabKey): LocalLineItem[] {
   }
 }
 
+// Tranche 4 r2 (R06): sha-256 hex of blob bytes, bound to a specific proof version.
+async function sha256Hex(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 // ─── Proof + cash lifecycle ──────────────────────────────────────────────────
 export async function attachProof(
   localId: string,
   proof: { blob: Blob; fileName: string; date?: string | null; bankRef?: string | null }
 ): Promise<void> {
+  const proofHash = await sha256Hex(proof.blob);
   await updateLineItem(localId, {
     proofBlob: proof.blob,
     proofFileName: proof.fileName,
     proofDate: proof.date ?? null,
     proofBankRef: proof.bankRef ?? null,
+    // Tranche 4 (item 4): NEW stable identity for THESE bytes (retries reuse it; replaced bytes get a fresh one).
+    proofObjectKey: `${uuid()}-proof.${(proof.fileName.split(".").pop() ?? "jpg").toLowerCase()}`,
+    // Tranche 4 r2 (R06): integrity expectation bound to these exact bytes.
+    proofHash,
+    proofSize: proof.blob.size,
   });
 }
 
 /**
- * Bulk cash banking (matches f6145ff1): mark ALL pending cash items (cash income +
- * all burial) as CashBanked and attach one deposit slip (held on the period; the sync
- * engine uploads it once and creates an attachment per banked item).
+ * Eligible pending cash for banking: Cash/CashPending in Members/Officers, plus all Burial
+ * cash. Already-CashBanked items are excluded (prevents double-banking). Expenses do NOT
+ * remove eligibility - they reduce the NET deposit amount, but the cash entries still exist
+ * and must be banked; eligibility is by ENTRY EXISTENCE, never by a net==0 display.
  */
-export async function markCashBanked(
-  periodLocalId: string,
-  deposit: { blob: Blob; fileName: string; date?: string | null; bankRef?: string | null }
-): Promise<void> {
-  const items = await getLineItems(periodLocalId);
-  const cashItems = items.filter(
+export function eligibleCashItems(items: LocalLineItem[]): LocalLineItem[] {
+  return items.filter(
     (i) =>
       (["Cash", "CashPending"].includes(i.item_type) && ["Members", "Officers"].includes(i.section)) ||
       i.item_type === "Burial"
   );
-  await db.transaction("rw", db.periods, db.lineItems, async () => {
+}
+
+/**
+ * Bulk cash banking (matches f6145ff1): mark ALL eligible pending cash items (cash income +
+ * all burial) as CashBanked and attach one deposit slip (held on the period; the sync engine
+ * uploads it once and creates an attachment per banked item).
+ *
+ * Task 8: eligibility is re-checked INSIDE the same transaction as the update (protection
+ * against the eligible set changing between check and write, incl. a stale screen). When there
+ * is NO eligible pending cash it is a no-op: no deposit proof is created/replaced and NO
+ * banking field is touched. Returns the number of items banked (0 => nothing eligible).
+ */
+export async function markCashBanked(
+  periodLocalId: string,
+  deposit: { blob: Blob; fileName: string; date?: string | null; bankRef?: string | null }
+): Promise<number> {
+  const depositHash = await sha256Hex(deposit.blob);
+  const depositObjectKey = `${uuid()}-deposit-slip.${(deposit.fileName.split(".").pop() ?? "jpg").toLowerCase()}`;
+  return db.transaction("rw", db.periods, db.lineItems, async () => {
+    const items = await getLineItems(periodLocalId);
+    const cashItems = eligibleCashItems(items);
+    if (cashItems.length === 0) return 0; // Task 8: no eligible cash -> do not create/replace deposit
     await db.periods.update(periodLocalId, {
       depositBlob: deposit.blob,
       depositFileName: deposit.fileName,
       depositDate: deposit.date ?? TODAY(),
       depositBankRef: deposit.bankRef ?? null,
+      // Tranche 4 (item 4): stable identity for the deposit-slip bytes.
+      depositObjectKey,
+      depositHash,
+      depositSize: deposit.blob.size,
       updatedAt: now(),
     });
     for (const ci of cashItems) {
       await db.lineItems.update(ci.localId, { item_type: "CashBanked", payment_type: "CashBanked" });
     }
+    return cashItems.length;
   });
 }
 

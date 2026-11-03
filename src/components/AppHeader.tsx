@@ -132,7 +132,15 @@ export function AppHeader() {
       <div className="flex h-12 items-center justify-between px-3 max-w-[1600px] mx-auto">
         {/* Left: Logo */}
         <div className="flex items-center gap-3">
-          <img src="/nac-logo.png" alt="NAC" width={28} height={28} className="rounded" />
+          {/* OAC brand mark. No binary OAC logo asset exists in /public (nac-logo.png was an
+              11-byte broken NAC placeholder), so use a text mark in the app's primary colours. */}
+          <div
+            className="flex h-7 w-7 items-center justify-center rounded bg-primary text-primary-foreground text-[9px] font-bold"
+            aria-label="OAC"
+            title="OAC Management System"
+          >
+            OAC
+          </div>
           <span className="text-sm font-semibold text-primary hidden sm:inline">OAC Management System</span>
         </div>
 
@@ -190,7 +198,7 @@ export function AppHeader() {
                       </button>
                       <button
                         onClick={handleRemovePin}
-                        className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive"
+                        className="w-full text-left px-3 py-2 text-sm rounded-sm text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:text-red-400 dark:hover:bg-red-950/40"
                       >
                         Remove
                       </button>
@@ -203,7 +211,7 @@ export function AppHeader() {
                       Enable offline mode (Set PIN)
                     </button>
                   ))}
-                <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted text-destructive">
+                <button onClick={handleSignOut} className="w-full text-left px-3 py-2 text-sm rounded-sm text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:text-red-400 dark:hover:bg-red-950/40">
                   Sign Out
                 </button>
               </div>

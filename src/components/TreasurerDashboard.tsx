@@ -12,17 +12,34 @@ import {
 } from "@/lib/permissions";
 import * as capture from "@/db/captureRepo";
 import * as dash from "@/db/dashboardRepo";
+import { syncPending } from "@/utils/syncEngine";
+import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { getCurrentOacWeek } from "@/lib/oacWeeks";
 import { periodStatusLabel } from "@/lib/statusLabels";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+
 import { CensusManager } from "@/components/CensusManager";
 import type { Role } from "@/lib/types";
 import type { MonthStatus } from "@/lib/phaseTypes";
 import type { LocalPeriod } from "@/db/schema";
 
 const money = (n: number): string => `R${n.toFixed(2)}`;
+
+// Task 1/2/4: truthful local-vs-server sync badge with clear, actionable labels.
+const syncBadge = (ls: string, isFuture: boolean, lastError: string | null): { t: string; title: string; c: string } => {
+  const slate = "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-700 dark:text-slate-100";
+  if (ls === "synced")
+    return { t: "Synced", title: "Confirmed (acknowledged) by the server", c: "bg-green-100 text-green-700 border-green-300 dark:bg-green-900 dark:text-green-200" };
+  if (ls === "failed")
+    return { t: "Sync failed", title: lastError ? `Last sync error: ${lastError}` : "Last sync attempt failed; retry when connected", c: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900 dark:text-red-200" };
+  if (ls === "conflict")
+    return { t: "Conflict", title: "Server advanced beyond this version; needs resolution", c: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900 dark:text-amber-200" };
+  // pending / syncing
+  return isFuture
+    ? { t: "On device · future (preserved)", title: "Saved on this device; a future-dated service is not synced and is preserved", c: slate }
+    : { t: "On device · not synced", title: "Saved on this device; not yet submitted/acknowledged by the server", c: slate };
+};
 
 // Role-specific dashboard title (removes "who is signed in" confusion even when the
 // view is shared). Label mapping only — not a permission check.
@@ -206,6 +223,9 @@ function CaptureLanding({
   const navigate = useNavigate();
   const [showNewWeek, setShowNewWeek] = useState(false);
   const [monthBusy, setMonthBusy] = useState(false);
+  const online = useOnlineStatus();
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const canSubmitMonth = hasPermission(role, MONTH_SUBMIT);
 
@@ -222,6 +242,30 @@ function CaptureLanding({
       onRefresh();
     } finally {
       setMonthBusy(false);
+    }
+  }
+
+  // Task 2: manual "Sync pending work", scoped to THIS congregation (actor isolation via scope +
+  // server RLS). Future-dated periods are skipped by the engine. Only confirmed server acks show as
+  // Synced; local data/proofs are preserved on failure. No automatic scheduling is enabled.
+  async function handleSync() {
+    if (syncing) return;
+    setSyncMsg(null);
+    setSyncing(true);
+    try {
+      const r = await syncPending(new Date(), congregationId);
+      const parts: string[] = [];
+      if (r.synced) parts.push(`${r.synced} synced`);
+      if (r.failed) parts.push(`${r.failed} failed`);
+      if (r.conflicts) parts.push(`${r.conflicts} conflict(s)`);
+      if (r.pending) parts.push(`${r.pending} still pending`);
+      if (r.skipped) parts.push(`${r.skipped} skipped (future/not due)`);
+      setSyncMsg(parts.length ? parts.join(" · ") : "Nothing pending to sync.");
+    } catch (e) {
+      setSyncMsg(e instanceof Error ? `Sync error: ${e.message}` : "Sync error.");
+    } finally {
+      setSyncing(false);
+      onRefresh();
     }
   }
 
@@ -280,17 +324,33 @@ function CaptureLanding({
       )}
 
       {/* Last 8 periods */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="text-sm font-semibold">Recent weeks</h2>
-        <Button
-          size="sm"
-          disabled={!canCapture}
-          title="Capture cashbook for a new week"
-          onClick={() => setShowNewWeek(true)}
-        >
-          + New Week
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!online || syncing}
+            title={online ? "Push this congregation's pending captures to the server" : "Connect to sync"}
+            onClick={() => void handleSync()}
+          >
+            {syncing ? "Syncing…" : `Sync pending work${kpis.outstanding ? ` (${kpis.outstanding})` : ""}`}
+          </Button>
+          <Button
+            size="sm"
+            disabled={!canCapture}
+            title="Capture cashbook for a new week"
+            onClick={() => setShowNewWeek(true)}
+          >
+            + New Week
+          </Button>
+        </div>
       </div>
+      {syncMsg && (
+        <p className="text-[11px] text-muted-foreground" role="status">
+          {syncMsg} — only confirmed server acknowledgements show as Synced; local data and proofs are preserved on failure.
+        </p>
+      )}
 
       {showNewWeek && (
         <NewWeekDialog
@@ -310,48 +370,67 @@ function CaptureLanding({
           No captured weeks yet. Use “+ New Week” to start.
         </p>
       ) : (
-        <table className="w-full text-xs">
+        <div className="overflow-x-auto">
+        <table className="w-full text-xs min-w-[680px]">
           <thead>
             <tr className="border-b text-left text-muted-foreground">
-              <th className="py-1 pr-2 font-medium">Week Ending</th>
-              <th className="py-1 pr-2 font-medium">Status</th>
+              <th className="py-1 pr-2 font-medium">Period</th>
+              <th className="py-1 pr-2 font-medium">Sync</th>
               <th className="py-1 pr-2 font-medium text-right">Total</th>
               <th className="py-1 pr-2 font-medium text-right">Banked</th>
+              <th className="py-1 pr-2 font-medium text-right">Burial</th>
+              <th className="py-1 pr-2 font-medium text-right">Expenses</th>
               <th className="py-1 font-medium text-center">Interim</th>
             </tr>
           </thead>
           <tbody>
-            {periods.map((p) => (
+            {periods.map((p) => {
+              const sb = syncBadge(p.localStatus, p.isFuture, p.lastError);
+              const pending = p.total - p.banked;
+              return (
               <tr key={p.localId} className="border-b last:border-0">
                 <td className="p-0">
                   <button
                     type="button"
                     className="w-full py-1 pr-2 text-left hover:underline"
+                    title={`${p.weekEnding} · ${p.service} · ${periodStatusLabel(p.status)}`}
                     onClick={() => navigate("/capture/" + p.localId)}
                   >
-                    {p.weekEnding} · {p.service}
+                    <span className="font-medium">Wk {p.week} · {p.serviceDate} {p.year}</span>
+                    <span className="ml-1 inline-block rounded bg-primary/10 px-1 text-[9px] font-bold text-primary">{p.service}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">{periodStatusLabel(p.status)}</span>
                   </button>
                 </td>
                 <td className="py-1 pr-2">
-                  <Badge variant="outline">{periodStatusLabel(p.status)}</Badge>
+                  <span className={`inline-block rounded border px-1.5 py-0.5 text-[9px] font-medium ${sb.c}`} title={sb.title}>{sb.t}</span>
+                  {p.localStatus === "failed" && p.lastError && (
+                    <span className="block max-w-[180px] truncate text-[9px] text-red-600 dark:text-red-400" title={p.lastError}>{p.lastError}</span>
+                  )}
                 </td>
                 <td className="py-1 pr-2 text-right">{money(p.total)}</td>
-                <td className="py-1 pr-2 text-right">{money(p.banked)}</td>
+                <td className="py-1 pr-2 text-right">
+                  {money(p.banked)}
+                  {pending > 0.005 && (
+                    <span className="block text-[9px] text-amber-700 dark:text-amber-400">pending {money(pending)}</span>
+                  )}
+                </td>
+                <td className="py-1 pr-2 text-right">{money(p.burial)}</td>
+                <td className="py-1 pr-2 text-right">{money(p.expenses)}</td>
                 <td className="py-1 text-center">
                   {p.hasInterim ? (
-                    <span
-                      className="inline-block h-2 w-2 rounded-full bg-amber-500"
-                      aria-label="Uses interim officer"
-                      title="Uses interim officer"
-                    />
+                    <span className="inline-flex items-center gap-1 text-[9px] text-amber-700 dark:text-amber-400" title="Uses an interim officer (pending HO)">
+                      <span className="inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />Interim
+                    </span>
                   ) : (
                     <span className="text-muted-foreground">–</span>
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
@@ -449,6 +528,11 @@ function NewWeekDialog({
         actingAsRole,
       });
       await logActingAsIfOnline(p.localId);
+      // Task 1: a zero-value R0 submission is a real "Submitted for audit" action - push it to the
+      // server like CashbookForm.submit does, so an acknowledged zero submission reaches the Auditor
+      // queue. Offline or on failure it stays pending on THIS device and is pushed on the NEXT
+      // user-triggered sync (another capture submit/R0); there is NO automatic reconnect sync here.
+      void syncPending().catch(() => {});
       onDone(p.localId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm R0.");

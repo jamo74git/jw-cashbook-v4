@@ -63,3 +63,26 @@ export function getCurrentOacWeek(now: Date = new Date()): { year: number; month
     weekKey: current?.weekKey ?? `${year}-${String(month).padStart(2, "0")}-W1`,
   };
 }
+
+// ─── Task 2: future-service guard + compact label (pure) ─────────────────────
+const _MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/**
+ * A service is "future" when its OAC week opens AFTER today's LOCAL date (compared by calendar
+ * day; time ignored). An unknown week returns false (controlled; never blocks a valid week).
+ * LIMITATION: this trusts the device clock. An authoritative check needs a server-side
+ * constraint/trigger comparing year/month/week to server time (recorded as a backend dependency).
+ */
+export function isFutureOacService(year: number, month: number, week: number, now: Date = new Date()): boolean {
+  const w = getOacWeeks(year, month).find((x) => x.weekNum === week);
+  if (!w) return false;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const wd = new Date(w.date.getFullYear(), w.date.getMonth(), w.date.getDate());
+  return wd.getTime() > today.getTime();
+}
+
+/** Compact service-date label for a period's OAC week, e.g. "08 Nov" ("" if unknown). */
+export function oacServiceDateLabel(year: number, month: number, week: number): string {
+  const w = getOacWeeks(year, month).find((x) => x.weekNum === week);
+  if (!w) return "";
+  return `${String(w.date.getDate()).padStart(2, "0")} ${_MONTHS2[w.date.getMonth()]}`;
+}

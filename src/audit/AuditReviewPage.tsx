@@ -42,6 +42,8 @@ interface Period {
   status: string;
   week_key: string | null;
   submitted_at: string | null;
+  submitted_by: string | null;
+  audit_comment: string | null;
 }
 interface LineItem {
   id: string;
@@ -86,6 +88,7 @@ export function AuditReviewPage() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [externallyChanged, setExternallyChanged] = useState(false);
+  const [decidedAt, setDecidedAt] = useState<string | null>(null);
 
   const [checkedBanking, setCheckedBanking] = useState(false);
   const [checkedCash, setCheckedCash] = useState(false);
@@ -125,6 +128,19 @@ export function AuditReviewPage() {
     const ids = new Set(lineItems.map((i) => i.id));
     setAttachments(((att.data ?? []) as Attachment[]).filter((a) => ids.has(a.line_item_id)));
     setOfficers((off.data ?? []) as Officer[]);
+    // Task 3: decision timestamp from the audit log (truthful; null -> "Not recorded").
+    if ((p as Period).status === "AuditApproved" || (p as Period).status === "Rejected") {
+      const { data: dec } = await supabase
+        .from("audit_log")
+        .select("created_at, action_type")
+        .eq("entity_id", periodId)
+        .in("action_type", ["AUDIT_APPROVE", "AUDIT_REJECT"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+      setDecidedAt(dec && dec.length > 0 ? (dec[0] as { created_at: string }).created_at : null);
+    } else {
+      setDecidedAt(null);
+    }
     setLoading(false);
   }, [periodId]);
 
@@ -265,21 +281,27 @@ export function AuditReviewPage() {
       </>
     );
 
-  const VerifyBox = ({ checked, set, label }: { checked: boolean; set: (v: boolean) => void; label: string }) => (
-    <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-      <input type="checkbox" checked={checked} onChange={(e) => set(e.target.checked)} className="rounded accent-green-600" />
-      <span className={checked ? "text-green-700 font-medium" : "text-muted-foreground"}>{label}</span>
-    </label>
-  );
+  // Task 3: section verification is only interactive during ACTIVE review (status Submitted). It is
+  // NOT persisted, so on historical (approved/rejected) periods we show a read-only "Not recorded".
+  const activeReview = period.status === "Submitted";
+  const VerifyBox = ({ checked, set, label }: { checked: boolean; set: (v: boolean) => void; label: string }) =>
+    activeReview ? (
+      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+        <input type="checkbox" checked={checked} onChange={(e) => set(e.target.checked)} className="rounded accent-green-600" />
+        <span className={checked ? "text-green-700 dark:text-green-400 font-medium" : "text-muted-foreground"}>{label}</span>
+      </label>
+    ) : (
+      <span className="text-[10px] text-muted-foreground" title="Section verification is not recorded for historical periods">Not recorded</span>
+    );
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-4 space-y-4">
       <Button variant="outline" size="sm" onClick={back}>← Back</Button>
 
-      <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between">
+      <div className="rounded-md bg-orange-50 border border-orange-200 px-4 py-3 flex items-center justify-between dark:bg-orange-950/40 dark:border-orange-800">
         <div>
-          <p className="text-sm font-bold text-orange-800">Audit Review</p>
-          <p className="text-[10px] text-orange-600">
+          <p className="text-sm font-bold text-orange-800 dark:text-orange-300">Audit Review</p>
+          <p className="text-[10px] text-orange-600 dark:text-orange-400">
             Week {period.week} · {period.service} · {period.year}/{String(period.month).padStart(2, "0")}
           </p>
         </div>
@@ -292,6 +314,19 @@ export function AuditReviewPage() {
           <button className="underline" onClick={() => void load()}>Reload</button>
         </div>
       )}
+
+      {/* Task 3: submission + decision metadata (truthful; "Not recorded" where absent). */}
+      <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] space-y-0.5">
+        <p>Submitted: <b>{period.submitted_at ? new Date(period.submitted_at).toLocaleString("en-GB") : "Not recorded"}</b></p>
+        {!activeReview && (
+          <>
+            <p>Decision: <b>{period.status === "AuditApproved" ? "Approved" : period.status === "Rejected" ? "Rejected" : period.status}</b> on{" "}
+              <b>{decidedAt ? new Date(decidedAt).toLocaleString("en-GB") : "Not recorded"}</b></p>
+            <p>Decision comment: <b>{period.audit_comment || "Not recorded"}</b></p>
+            <p className="text-muted-foreground">Read-only historical review. Section verification is not recorded.</p>
+          </>
+        )}
+      </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-2">
@@ -456,14 +491,14 @@ export function AuditReviewPage() {
         <Card className={allChecked ? "border-green-300" : "border-orange-200"}>
           <CardHeader className="pb-2">
             <CardTitle className="text-xs">Audit Decision</CardTitle>
-            {!allChecked && <p className="text-[10px] text-orange-600">Verify all four sections before approving.</p>}
+            {!allChecked && <p className="text-[10px] text-orange-600 dark:text-orange-400">Verify all four sections before approving.</p>}
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-3 text-[10px]">
-              <span className={checkedBanking ? "text-green-700" : "text-muted-foreground"}>✓ Banking</span>
-              <span className={checkedCash ? "text-green-700" : "text-muted-foreground"}>✓ Cash</span>
-              <span className={checkedBurial ? "text-green-700" : "text-muted-foreground"}>✓ Burial</span>
-              <span className={checkedExpenses ? "text-green-700" : "text-muted-foreground"}>✓ Expenses</span>
+              <span className={checkedBanking ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Banking</span>
+              <span className={checkedCash ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Cash</span>
+              <span className={checkedBurial ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Burial</span>
+              <span className={checkedExpenses ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Expenses</span>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Comment {canReject ? "(mandatory for rejection)" : "(optional)"}</Label>
@@ -472,7 +507,7 @@ export function AuditReviewPage() {
             {error && <p className="text-xs text-destructive">{error}</p>}
             <div className="flex gap-3">
               {canApprove && (
-                <Button size="sm" className="bg-green-700 hover:bg-green-800" onClick={() => void decide("approve")} disabled={processing || !allChecked}>
+                <Button size="sm" className="bg-green-700 text-white hover:bg-green-800" onClick={() => void decide("approve")} disabled={processing || !allChecked}>
                   {processing ? "…" : "Approve"}
                 </Button>
               )}

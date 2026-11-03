@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { resolveAccess } from "@/lib/routeGuard";
+import { getDashboardRoute } from "@/lib/permissions";
 import { getSession } from "@/services/authService";
 import * as capture from "@/db/captureRepo";
-import { getOacWeeks, getCurrentOacWeek, type OacWeek } from "@/lib/oacWeeks";
+import { getOacWeeks, getCurrentOacWeek, isFutureOacService, type OacWeek } from "@/lib/oacWeeks";
 import { periodStatusLabel } from "@/lib/statusLabels";
 import { CashbookForm } from "@/components/CashbookForm";
+import { Button } from "@/components/ui/button";
 import type { LocalPeriod, OfficerLookup } from "@/db/schema";
 import type { Role } from "@/lib/types";
 
@@ -28,7 +30,9 @@ export function CapturePage() {
   const [officers, setOfficers] = useState<OfficerLookup[]>([]);
   const [proofMandatory, setProofMandatory] = useState(false);
   const [period, setPeriod] = useState<LocalPeriod | null>(null);
+  const [futureBlocked, setFutureBlocked] = useState(false); // Task 2: future service date selected
   const { periodLocalId } = useParams<{ periodLocalId?: string }>();
+  const navigate = useNavigate();
 
   // Resolve role + congregation once.
   useEffect(() => {
@@ -75,6 +79,14 @@ export function CapturePage() {
   const resolvePeriod = useCallback(async () => {
     if (ctx.status !== "ready" || !weekKey) return;
     const wk = weeks.find((w) => w.weekKey === weekKey);
+    // Task 2: do not create/open a future-dated service (the data layer also guards). Current and
+    // past (catch-up) weeks are allowed; existing records are never changed here.
+    if (isFutureOacService(base.year, base.month, wk?.weekNum ?? 1)) {
+      setFutureBlocked(true);
+      setPeriod(null);
+      return;
+    }
+    setFutureBlocked(false);
     const p = await capture.getOrCreateLocalPeriod({
       congregationId: ctx.congregationId,
       weekKey,
@@ -133,7 +145,17 @@ export function CapturePage() {
         </div>
       </div>
 
-      {period ? (
+      {futureBlocked ? (
+        <div className="space-y-3">
+          <p className="text-sm text-amber-700 dark:text-amber-400">
+            This service date is in the future. You can capture the current or a past week (including
+            catch-up weeks), but not a future one. Any existing data for it is preserved.
+          </p>
+          <Button variant="outline" size="sm" onClick={() => navigate(getDashboardRoute(ctx.role))}>
+            &larr; Back to dashboard
+          </Button>
+        </div>
+      ) : period ? (
         <CashbookForm
           key={period.localId}
           period={period}
@@ -141,6 +163,7 @@ export function CapturePage() {
           officers={officers}
           proofMandatory={proofMandatory}
           onChanged={reloadPeriod}
+          onSaveAndReturn={() => navigate(getDashboardRoute(ctx.role))}
         />
       ) : (
         <p className="text-sm text-muted-foreground">Resolving period…</p>

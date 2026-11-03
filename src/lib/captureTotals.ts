@@ -112,3 +112,22 @@ export function cashProofInvariantHolds(item: CaptureItem): boolean {
   if (item.item_type !== "Cash") return true;
   return item.item_count === null && item.proof_status === null;
 }
+
+// ─── Task 1: future transaction-date guard (pure) ────────────────────────────
+// A transaction date is "future" if it is later than the local device date. Dates are
+// ISO yyyy-mm-dd, so lexicographic compare == chronological. Null/empty is never future.
+// `today` is injectable for tests and defaults to the LOCAL device date.
+//
+// LIMITATION: this trusts the device clock; a wrong/rolled-back clock defeats it. An
+// authoritative check needs a server-side constraint/trigger comparing to server time
+// (recorded separately as a backend dependency).
+export function localTodayISO(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+export function isFutureDate(dateStr: string | null | undefined, today: string = localTodayISO()): boolean {
+  if (!dateStr) return false;
+  return dateStr > today;
+}

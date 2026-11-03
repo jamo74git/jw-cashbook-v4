@@ -200,6 +200,11 @@ export interface LocalPeriod {
   depositFileName: string | null;
   depositDate: string | null;
   depositBankRef: string | null;
+  // Tranche 4 (item 4): stable deposit-slip object-key filename; reused across retries.
+  depositObjectKey?: string | null;
+  // Tranche 4 r2 (R06): deposit-slip integrity expectation.
+  depositHash?: string | null;
+  depositSize?: number | null;
   localStatus: LocalSyncStatus;
   createdAt: string;
   updatedAt: string;
@@ -246,6 +251,11 @@ export interface LocalLineItem {
   proofFileName: string | null;
   proofBankRef: string | null;
   proofDate: string | null;
+  // Tranche 4 (item 4): stable proof object-key filename; reused across retries.
+  proofObjectKey?: string | null;
+  // Tranche 4 r2 (R06): per-version integrity expectation for duplicate verification.
+  proofHash?: string | null; // sha-256 hex of the proof bytes
+  proofSize?: number | null;
   localStatus: LocalSyncStatus;
 }
 

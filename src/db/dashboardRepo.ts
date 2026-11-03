@@ -5,8 +5,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db, type LocalPeriod, type LocalLineItem } from "@/db/schema";
-import { incomeTotal, bankedTotal, type CaptureItem } from "@/lib/captureTotals";
-import { getCurrentOacWeek, getOacWeeks } from "@/lib/oacWeeks";
+import { incomeTotal, bankedTotal, sectionTotals, expensesTotal, type CaptureItem } from "@/lib/captureTotals";
+import { getCurrentOacWeek, getOacWeeks, oacServiceDateLabel, isFutureOacService } from "@/lib/oacWeeks";
 
 // ─── Treasurer/Chair settings (flags default to false when absent) ────────────
 export interface DashboardSettings {
@@ -140,6 +140,14 @@ export interface RecentPeriodRow {
   service: "AM" | "PM";
   total: number;
   banked: number;
+  burial: number;
+  expenses: number;
+  year: number;
+  month: number;
+  week: number;
+  serviceDate: string; // compact OAC date e.g. "08 Nov"
+  isFuture: boolean; // Task 2: future-dated service (skipped by sync, preserved)
+  lastError: string | null; // last sync error for this period (shown on "Sync failed")
   hasInterim: boolean;
 }
 
@@ -165,6 +173,7 @@ export async function listRecentPeriods(
     const hasInterim = lineItems.some((i) => i.officer_id != null && interimIds.has(i.officer_id));
 
     const week = getOacWeeks(p.year, p.month).find((w) => w.weekKey === p.weekKey);
+    const sec = sectionTotals(items);
     rows.push({
       localId: p.localId,
       weekKey: p.weekKey,
@@ -174,6 +183,14 @@ export async function listRecentPeriods(
       service: p.service,
       total: incomeTotal(items),
       banked: bankedTotal(items),
+      burial: sec.Burial,
+      expenses: expensesTotal(items),
+      year: p.year,
+      month: p.month,
+      week: p.week,
+      serviceDate: oacServiceDateLabel(p.year, p.month, p.week),
+      isFuture: isFutureOacService(p.year, p.month, p.week),
+      lastError: p.lastError,
       hasInterim,
     });
   }
