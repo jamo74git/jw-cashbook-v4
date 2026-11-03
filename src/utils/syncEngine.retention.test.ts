@@ -378,3 +378,14 @@ describe("Task 2 - future-dated period is skipped by sync (never auto-submitted)
     expect((await db.periods.get("p1"))?.localStatus).toBe("pending"); // preserved, not submitted to server
   });
 });
+
+describe("Manual sync - congregation isolation", () => {
+  it("syncPending(now, congregationId) only processes that congregation's pending work", async () => {
+    await db.periods.add(makePeriod({ localId: "pA", naturalKey: "congA|2020-01-W1|AM", congregationId: "congA", status: "Submitted", localStatus: "pending" }));
+    await db.periods.add(makePeriod({ localId: "pB", naturalKey: "congB|2020-01-W1|AM", congregationId: "congB", status: "Submitted", localStatus: "pending" }));
+    const r = await syncPending(new Date(), "congA");
+    expect(r.synced).toBe(1); // only congA attempted/acknowledged
+    expect((await db.periods.get("pA"))?.localStatus).toBe("synced");
+    expect((await db.periods.get("pB"))?.localStatus).toBe("pending"); // other congregation untouched
+  });
+});

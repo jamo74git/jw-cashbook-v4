@@ -26,19 +26,20 @@ import type { LocalPeriod } from "@/db/schema";
 
 const money = (n: number): string => `R${n.toFixed(2)}`;
 
-// Task 1/2/4: truthful local-vs-server sync badge with clear, actionable labels.
+// Sync presentation: compact, user-facing sync label per recent period. Longer explanations live in
+// the accessible (i) legend, not only in hover tooltips. Future-dated records are shown as "Future
+// date" (never dev wording) and are retained on-device, not auto-synced.
 const syncBadge = (ls: string, isFuture: boolean, lastError: string | null): { t: string; title: string; c: string } => {
   const slate = "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-700 dark:text-slate-100";
+  if (isFuture)
+    return { t: "Future date", title: "The service date has not arrived yet, so it cannot be transferred. Saved on this device.", c: "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900 dark:text-blue-200" };
   if (ls === "synced")
-    return { t: "Synced", title: "Confirmed (acknowledged) by the server", c: "bg-green-100 text-green-700 border-green-300 dark:bg-green-900 dark:text-green-200" };
+    return { t: "Synced", title: "Acknowledged by the server.", c: "bg-green-100 text-green-700 border-green-300 dark:bg-green-900 dark:text-green-200" };
   if (ls === "failed")
-    return { t: "Sync failed", title: lastError ? `Last sync error: ${lastError}` : "Last sync attempt failed; retry when connected", c: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900 dark:text-red-200" };
+    return { t: "Sync failed", title: lastError ? `Last sync error: ${lastError}` : "Last sync attempt failed; retry when connected.", c: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900 dark:text-red-200" };
   if (ls === "conflict")
-    return { t: "Conflict", title: "Server advanced beyond this version; needs resolution", c: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900 dark:text-amber-200" };
-  // pending / syncing
-  return isFuture
-    ? { t: "On device · future (preserved)", title: "Saved on this device; a future-dated service is not synced and is preserved", c: slate }
-    : { t: "On device · not synced", title: "Saved on this device; not yet submitted/acknowledged by the server", c: slate };
+    return { t: "Conflict", title: "Server advanced beyond this version; needs resolution.", c: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-900 dark:text-amber-200" };
+  return { t: "Not synced", title: "Saved on this device, awaiting transfer to the server.", c: slate };
 };
 
 // Role-specific dashboard title (removes "who is signed in" confusion even when the
@@ -226,6 +227,7 @@ function CaptureLanding({
   const online = useOnlineStatus();
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [showSyncHelp, setShowSyncHelp] = useState(false);
 
   const canSubmitMonth = hasPermission(role, MONTH_SUBMIT);
 
@@ -259,7 +261,7 @@ function CaptureLanding({
       if (r.failed) parts.push(`${r.failed} failed`);
       if (r.conflicts) parts.push(`${r.conflicts} conflict(s)`);
       if (r.pending) parts.push(`${r.pending} still pending`);
-      if (r.skipped) parts.push(`${r.skipped} skipped (future/not due)`);
+      if (r.skipped) parts.push(`${r.skipped} skipped (future-dated or not yet due)`);
       setSyncMsg(parts.length ? parts.join(" · ") : "Nothing pending to sync.");
     } catch (e) {
       setSyncMsg(e instanceof Error ? `Sync error: ${e.message}` : "Sync error.");
@@ -277,7 +279,7 @@ function CaptureLanding({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard title="Outstanding Weeks">
           <p className="text-2xl font-bold">{kpis.outstanding}</p>
-          <p className="text-xs text-muted-foreground">Unsynced, before this week</p>
+          <p className="text-xs text-muted-foreground">Overdue prior weeks (before this week; future weeks are not counted)</p>
         </KpiCard>
 
         <KpiCard title="This Month">
@@ -325,7 +327,20 @@ function CaptureLanding({
 
       {/* Last 8 periods */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h2 className="text-sm font-semibold">Recent weeks</h2>
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-sm font-semibold">Recent weeks</h2>
+          <button
+            type="button"
+            aria-expanded={showSyncHelp}
+            aria-controls="sync-legend"
+            title="What the Sync labels mean"
+            className="flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-semibold text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setShowSyncHelp((v) => !v)}
+          >
+            <span aria-hidden="true">i</span>
+            <span className="sr-only">What the Sync labels mean</span>
+          </button>
+        </div>
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -346,9 +361,18 @@ function CaptureLanding({
           </Button>
         </div>
       </div>
+      {showSyncHelp && (
+        <div id="sync-legend" className="rounded border bg-muted/30 p-2 text-[11px] space-y-1">
+          <p><b>Synced</b> — acknowledged by the server.</p>
+          <p><b>Not synced</b> — saved on this device, awaiting transfer. Use &ldquo;Sync pending work&rdquo; when online.</p>
+          <p><b>Sync failed</b> — the last attempt did not go through; the reason is shown under the badge. Retry with &ldquo;Sync pending work&rdquo;.</p>
+          <p><b>Conflict</b> — the server moved ahead of this version; it needs resolution.</p>
+          <p><b>Future date</b> — the service date has not arrived, so it is not transferable yet. It stays saved on this device and is never auto-synced. When the date arrives it is no longer future-dated, but there is no automatic reconnect sync — transfer it with &ldquo;Sync pending work&rdquo;.</p>
+        </div>
+      )}
       {syncMsg && (
         <p className="text-[11px] text-muted-foreground" role="status">
-          {syncMsg} — only confirmed server acknowledgements show as Synced; local data and proofs are preserved on failure.
+          {syncMsg}. Only confirmed server acknowledgements show as Synced; skipped work is NOT synced; future-dated weeks are never auto-synced; local data and proofs are preserved on failure.
         </p>
       )}
 
