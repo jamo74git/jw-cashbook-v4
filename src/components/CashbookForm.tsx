@@ -470,7 +470,11 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
       requestorComment: requestorComment.trim() || undefined,
       elderApprovalComment: elderComment.trim() || undefined,
     });
-    void syncPending().catch(() => {});
+    // Actor isolation: scope the submit-triggered sync to THIS period's congregation so it never
+    // flushes another congregation's pending work under the current session. (Residual: a different
+    // user's pending work in the SAME congregation on a shared device still needs a capturedByUserId
+    // filter + authenticated verification - reported.)
+    void syncPending(new Date(), period.congregationId).catch(() => {});
     setSubmitting(false);
     onChanged();
   }

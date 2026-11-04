@@ -556,7 +556,7 @@ function NewWeekDialog({
       // server like CashbookForm.submit does, so an acknowledged zero submission reaches the Auditor
       // queue. Offline or on failure it stays pending on THIS device and is pushed on the NEXT
       // user-triggered sync (another capture submit/R0); there is NO automatic reconnect sync here.
-      void syncPending().catch(() => {});
+      void syncPending(new Date(), congregationId).catch(() => {}); // actor isolation: scope to this congregation
       onDone(p.localId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm R0.");
