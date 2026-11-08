@@ -51,6 +51,12 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "audit.view_queue": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "-", Secretary: "-" },
   "audit.approve": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "O", Auditor: "A", Treasurer: "-", Secretary: "-" },
   "audit.reject": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "O", Auditor: "A", Treasurer: "-", Secretary: "-" },
+  // Two-person sign-off (PRIORITY 2): the ACTING-AUDITOR completing sign-off is
+  // Chairperson-only ("O"). Elder also carries "O" on audit.approve for its separate,
+  // audited drill-in override, but Elder oversight is NOT an audit signature — so Elder
+  // is "-" here. This distinguishes the two "O" holders through the matrix rather than a
+  // role-string check, keeping the matrix the single source of truth (steering #1).
+  "audit.acting_signoff": { HO: "-", Apostle: "-", Overseer: "-", Elder: "-", Chairperson: "O", Auditor: "-", Treasurer: "-", Secretary: "-" },
 
   // ── Monthly Close ───────────────────────────────────────────────────────
   "month.view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "V", Secretary: "V" },
@@ -188,6 +194,16 @@ export function isTotalsOnly(role: Role, moduleFunction: string): boolean {
  */
 export function isOverrideAction(role: Role, moduleFunction: string): boolean {
   return getPermission(role, moduleFunction) === "O";
+}
+
+/**
+ * Two-person sign-off (PRIORITY 2): may this role give the CHAIRPERSON acting-auditor
+ * completing sign-off? Matrix-routed via `audit.acting_signoff` ("O" = Chairperson only).
+ * Elder is excluded even though it holds "O" on `audit.approve` — Elder oversight is not
+ * an audit signature. No role strings: the distinction lives in the matrix.
+ */
+export function isActingAuditor(role: Role): boolean {
+  return getPermission(role, "audit.acting_signoff") === "O";
 }
 
 /**

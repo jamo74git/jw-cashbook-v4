@@ -77,6 +77,41 @@ export const AUDIT_ACTION_TYPES = [
 
 export type AuditActionType = (typeof AUDIT_ACTION_TYPES)[number];
 
+// ─── Two-Person Audit Sign-Off (PRIORITY 2) ─────────────────────────────────
+//
+// Extends the single-decision `cashbook_review_decision` authority into a sign-off
+// ledger: a reviewed revision needs TWO accepted `signoff` rows (one must be a real
+// Auditor) before it transitions to AuditApproved. `reject`/`reopen` are unchanged.
+// These shapes mirror the authored-but-NOT-applied migration
+// (supabase/migrations/*_two_person_signoff.sql); the server is authoritative.
+
+export const REVIEW_DECISIONS = ["signoff", "reject", "reopen"] as const;
+export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
+
+// Matrix code carried on an audit.approve sign-off: 'A' = real Auditor (primary),
+// 'O' = Chairperson acting-auditor (completing slot only, recorded reason required).
+export const SIGNOFF_PERM_CODES = ["A", "O"] as const;
+export type SignoffPermCode = (typeof SIGNOFF_PERM_CODES)[number];
+
+// Row of the extended `cashbook_review_decision` ledger (one accepted `signoff` per
+// distinct signer per reviewed revision; history preserved, never deleted).
+export interface CashbookReviewDecisionRow {
+  id: string;
+  period_id: string;
+  actor_user_id: string;
+  capture_generation: number;
+  reviewed_revision: number;
+  decision: ReviewDecision;
+  outcome: string; // 'accepted' | 'rejected_stale' | 'rejected_competing'
+  signoff_slot: number | null; // 1 = first, 2 = completing
+  signoff_perm_code: SignoffPermCode | null;
+  acting_as_auditor: boolean;
+  acting_reason: string | null;
+  completes_approval: boolean; // true on the row that drove AuditApproved
+  reason: string | null;
+  created_at: string;
+}
+
 // ─── Census Staleness ───────────────────────────────────────────────────────
 
 export const STALENESS_FLAGS = ["GREEN", "ORANGE", "RED"] as const;
