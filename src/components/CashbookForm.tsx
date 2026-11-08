@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hasPermission, isOverrideAction, logSelfReviewException } from "@/lib/permissions";
+import { resolveSignOff } from "@/lib/completeCapture";
 import { createClient } from "@/lib/supabase/client";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { db } from "@/db/schema";
@@ -103,6 +104,9 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
   const canEdit = hasPermission(role, "capture.edit") && editable;
   const canSubmit = hasPermission(role, "capture.submit") && editable;
   const canRequestInterim = hasPermission(role, "officer.interim_add");
+  // Complete_Capture sign-off: Treasurer by default; anyone else = recorded exception.
+  const signOff = resolveSignOff(role);
+  const [signOffReason, setSignOffReason] = useState("");
 
   // Cached officers plus any interim officers requested this session.
   const allOfficers = useMemo(() => {
@@ -451,8 +455,13 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
 
   async function submit() {
     if (!canSubmit || !balanced) return;
+    if (!signOff.eligible) return setError("You are not permitted to complete and sign off this capture.");
     if (over500 && !elderComment.trim()) return setError("Elder approval comment required for expenses over R500");
     if (proofMandatory && missingProofs.length > 0) return setError(`${missingProofs.length} proof(s) missing`);
+    // Treasurer is the default signer; anyone else must record an exception reason (e.g. Treasurer ill).
+    if (signOff.requiresException && !signOffReason.trim()) {
+      return setError("A sign-off reason is required when the Treasurer is not signing (e.g. Treasurer ill).");
+    }
     setSubmitting(true);
     if (isOverrideAction(role, "capture.submit")) {
       try {
@@ -466,15 +475,32 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
         /* offline */
       }
     }
+    // Complete_Capture: freeze the revision + Required_Manifest and record the sign-off. An
+    // exception sign-off also carries actingAsRole so the mandatory ACTING_AS_TREASURER audit
+    // is flushed by the Sync_Engine.
     await capture.submitPeriod(period.localId, {
       requestorComment: requestorComment.trim() || undefined,
       elderApprovalComment: elderComment.trim() || undefined,
+      actingAsRole: signOff.requiresException ? signOff.signOffRole : null,
+      signOff: {
+        role: signOff.signOffRole ?? "Treasurer",
+        isException: signOff.requiresException,
+        reason: signOff.requiresException ? signOffReason.trim() : null,
+        completedByUserId: period.capturedByUserId,
+      },
     });
-    // Actor isolation: scope the submit-triggered sync to THIS period's congregation so it never
-    // flushes another congregation's pending work under the current session. (Residual: a different
-    // user's pending work in the SAME congregation on a shared device still needs a capturedByUserId
-    // filter + authenticated verification - reported.)
-    void syncPending(new Date(), period.congregationId).catch(() => {});
+    // Actor isolation: scope the submit-triggered sync to THIS period's congregation AND the
+    // authenticated actor, so a shared device never dispatches a second user's queued work under
+    // the wrong identity. Falls back to the capturer id when the auth user cannot be read (offline);
+    // the server (RLS) remains the authority.
+    let actorUserId = period.capturedByUserId;
+    try {
+      const { data: authData } = await createClient().auth.getUser();
+      if (authData?.user?.id) actorUserId = authData.user.id;
+    } catch {
+      /* offline: fall back to the capturer id; server RLS still enforces authority */
+    }
+    void syncPending(new Date(), period.congregationId, { actorUserId }).catch(() => {});
     setSubmitting(false);
     onChanged();
   }
@@ -852,20 +878,38 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
             Save draft and return
           </Button>
         )}
+        {/* Complete_Capture sign-off. Treasurer is the default; a non-Treasurer signer
+            (e.g. the Chairperson when the Treasurer is ill) is an EXCEPTION and must record a reason. */}
+        {editable && signOff.requiresException && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-2 space-y-2 dark:border-amber-800 dark:bg-amber-950/40">
+            <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300">
+              Treasurer sign-off is the default. You are completing this capture as an exception; a reason is
+              required and recorded with the submission.
+            </p>
+            <Input
+              className="h-8 text-xs"
+              placeholder="Reason for signing as an exception (e.g. Treasurer ill) *"
+              value={signOffReason}
+              onChange={(e) => setSignOffReason(e.target.value)}
+            />
+          </div>
+        )}
         {editable && (
           <Button
             className="w-full"
             disabled={
               submitting ||
               !canSubmit ||
+              !signOff.eligible ||
               income === 0 ||
               !balanced ||
               (proofMandatory && missingProofs.length > 0) ||
-              (over500 && !elderComment.trim())
+              (over500 && !elderComment.trim()) ||
+              (signOff.requiresException && !signOffReason.trim())
             }
             onClick={submit}
           >
-            {submitting ? "…" : "Submit for Audit"}
+            {submitting ? "…" : "Complete capture & submit for audit"}
           </Button>
         )}
         {!editable && (

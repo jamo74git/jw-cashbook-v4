@@ -11,6 +11,7 @@
 
 import Dexie, { type Table } from "dexie";
 import type { Role, HierarchyLevel, LineSection } from "@/lib/types";
+import type { RequiredManifest } from "@/lib/completeCapture";
 import type {
   AttendanceType,
   CensusBucket,
@@ -226,6 +227,19 @@ export interface LocalPeriod {
   monthStatus?: MonthStatus; // default "Open"
   monthSubmittedToOverseerAt?: string | null;
   monthSubmittedBy?: string | null;
+  // ── Complete_Capture freeze (PRIORITY 1; additive, optional, non-indexed) ────
+  // Set at Complete_Capture (submit). `completeCaptureRevision` is a monotonic marker:
+  // a re-submission after a rejection freezes a NEW revision with a FRESH manifest, so
+  // declared-present vs declared-outstanding proofs always belong to an exact revision.
+  completeCaptureRevision?: number | null;
+  completedAt?: string | null;
+  completedByUserId?: string | null;
+  // Sign-off: Treasurer is the DEFAULT signer; anyone else is a recorded EXCEPTION.
+  signOffRole?: Role | null; // role signed off AS (Treasurer)
+  signOffIsException?: boolean | null;
+  signOffReason?: string | null;
+  // The frozen proof LIST belonging to this revision (Required_Manifest, §2.2.1).
+  requiredManifest?: RequiredManifest | null;
 }
 
 // ─── Local line item (mirrors cashbook_line_item + offline proof) ────────────

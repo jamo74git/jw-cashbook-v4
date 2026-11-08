@@ -24,6 +24,7 @@ import {
   type ItemType,
 } from "@/lib/captureTotals";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
+import { computeReviewReadiness } from "@/lib/completeCapture";
 import { ProofLink } from "@/audit/ProofLink";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -198,6 +199,16 @@ export function AuditReviewPage() {
   const burialItems = items.filter((i) => i.item_type === "Burial");
   const expenseItems = items.filter((i) => i.item_type === "Expense");
 
+  // Review_Ready gate (PRIORITY 1): `Submitted` is NOT the same as "Ready for Audit".
+  // Approval opens only once evidence (every proof-required line has an attachment) AND the
+  // balance verify for this revision. This is the client mirror of the server-computed
+  // condition; the AUTHORITATIVE exact-revision Review_Ready is computed server-side from
+  // cashbook_submission_manifest (schema-gated, NOT applied) — flag for hosted testing.
+  const reviewReadiness = computeReviewReadiness(
+    items.map((i) => ({ id: i.id, section: i.section, item_type: i.item_type, amount: Number(i.amount) })),
+    attachments.map((a) => a.line_item_id)
+  );
+
   function back() {
     const r = access?.role;
     if (r === "Elder") navigate("/elder");
@@ -207,7 +218,9 @@ export function AuditReviewPage() {
 
   async function decide(kind: "approve" | "reject") {
     if (!period || !access) return;
-    if (kind === "approve" && (!canApprove || !allChecked)) return;
+    // Approval requires Review_Ready (evidence + balance for the exact revision); rejection
+    // only needs an actor + reason + the reviewed revision (design §6.3), so it is NOT gated here.
+    if (kind === "approve" && (!canApprove || !allChecked || !reviewReadiness.ready)) return;
     if (kind === "reject" && (!canReject || !comment.trim())) return;
 
     const permKey = kind === "approve" ? "audit.approve" : "audit.reject";
@@ -486,12 +499,28 @@ export function AuditReviewPage() {
         </CardContent>
       </Card>
 
+      {/* Review_Ready separation: Submitted but not yet ready for audit sign-off. */}
+      {activeReview && !reviewReadiness.ready && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300" role="status">
+          <b>Submitted — not yet ready for audit.</b> Approval opens only once the revision balances and
+          every required proof is present.
+          {!reviewReadiness.balanced && <span> This revision does not balance.</span>}
+          {reviewReadiness.missingEvidenceLineIds.length > 0 && (
+            <span> {reviewReadiness.missingEvidenceLineIds.length} line(s) are missing proof evidence.</span>
+          )}
+          <span className="block text-[10px] text-muted-foreground">
+            Rejection with a comment remains available. Authoritative readiness is verified server-side for the exact submitted revision.
+          </span>
+        </div>
+      )}
+
       {/* Audit decision */}
       {decisionOpen && (
-        <Card className={allChecked ? "border-green-300" : "border-orange-200"}>
+        <Card className={allChecked && reviewReadiness.ready ? "border-green-300" : "border-orange-200"}>
           <CardHeader className="pb-2">
             <CardTitle className="text-xs">Audit Decision</CardTitle>
             {!allChecked && <p className="text-[10px] text-orange-600 dark:text-orange-400">Verify all four sections before approving.</p>}
+            {allChecked && !reviewReadiness.ready && <p className="text-[10px] text-orange-600 dark:text-orange-400">Not ready for audit: evidence and/or balance are incomplete for this revision.</p>}
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-3 text-[10px]">
@@ -507,7 +536,7 @@ export function AuditReviewPage() {
             {error && <p className="text-xs text-destructive">{error}</p>}
             <div className="flex gap-3">
               {canApprove && (
-                <Button size="sm" className="bg-green-700 text-white hover:bg-green-800" onClick={() => void decide("approve")} disabled={processing || !allChecked}>
+                <Button size="sm" className="bg-green-700 text-white hover:bg-green-800" onClick={() => void decide("approve")} disabled={processing || !allChecked || !reviewReadiness.ready}>
                   {processing ? "…" : "Approve"}
                 </Button>
               )}

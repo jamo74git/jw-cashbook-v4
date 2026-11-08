@@ -12,6 +12,7 @@ import {
 } from "@/lib/permissions";
 import * as capture from "@/db/captureRepo";
 import * as dash from "@/db/dashboardRepo";
+import { resolveSignOff } from "@/lib/completeCapture";
 import { syncPending } from "@/utils/syncEngine";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { getCurrentOacWeek } from "@/lib/oacWeeks";
@@ -255,7 +256,9 @@ function CaptureLanding({
     setSyncMsg(null);
     setSyncing(true);
     try {
-      const r = await syncPending(new Date(), congregationId);
+      // Actor isolation: scope to this congregation AND the authenticated actor so a shared
+      // device never dispatches another user's queued work under the current identity.
+      const r = await syncPending(new Date(), congregationId, { actorUserId: userId });
       const parts: string[] = [];
       if (r.synced) parts.push(`${r.synced} synced`);
       if (r.failed) parts.push(`${r.failed} failed`);
@@ -493,7 +496,10 @@ function NewWeekDialog({
 
   const service: "AM" | "PM" = "AM";
   const canConfirmR0 = hasPermission(role, CAPTURE_R0_CONFIRM);
-  const actingAsRole: Role | null = role === "Chairperson" ? "Treasurer" : null;
+  // Matrix-routed (no role-string check): Treasurer signs off by default; any other eligible
+  // submitter (e.g. Chairperson when the Treasurer is ill) acts AS Treasurer and is audited.
+  const signOff = resolveSignOff(role);
+  const actingAsRole: Role | null = signOff.requiresException ? signOff.signOffRole : null;
 
   useEffect(() => {
     (async () => {
@@ -556,7 +562,7 @@ function NewWeekDialog({
       // server like CashbookForm.submit does, so an acknowledged zero submission reaches the Auditor
       // queue. Offline or on failure it stays pending on THIS device and is pushed on the NEXT
       // user-triggered sync (another capture submit/R0); there is NO automatic reconnect sync here.
-      void syncPending(new Date(), congregationId).catch(() => {}); // actor isolation: scope to this congregation
+      void syncPending(new Date(), congregationId, { actorUserId: userId }).catch(() => {}); // actor isolation: congregation + actor
       onDone(p.localId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to confirm R0.");

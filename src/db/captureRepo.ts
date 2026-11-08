@@ -14,6 +14,7 @@ import {
 } from "@/db/schema";
 import type { Role, LineSection } from "@/lib/types";
 import type { MonthStatus } from "@/lib/phaseTypes";
+import { computeRequiredManifest } from "@/lib/completeCapture";
 import { getOrCreateDeviceId } from "@/lib/deviceId";
 import { getCurrentOacWeek, isFutureOacService } from "@/lib/oacWeeks";
 import { isFutureDate } from "@/lib/captureTotals";
@@ -121,7 +122,16 @@ export async function setPeriodStatus(periodLocalId: string, status: PeriodStatu
   await db.periods.update(periodLocalId, { status, updatedAt: now(), localStatus: "pending" });
 }
 
-/** Submit a period for audit (soft-lock). Governance gating is enforced by the UI. */
+/**
+ * Complete_Capture: submit a period for audit (soft-lock) AND freeze the revision +
+ * its Required_Manifest (the proof LIST belonging to this exact revision). A
+ * re-submission after a rejection freezes a NEW revision with a FRESH manifest.
+ *
+ * `Submitted` only locks local editing; it is NOT "Ready for Audit". Proofs recorded
+ * as declared-outstanding in the frozen manifest may legitimately finish uploading
+ * AFTER submission; approval opens only once evidence + balance verify for this revision.
+ * Governance gating (who may sign off) is resolved by the UI via `resolveSignOff`.
+ */
 export async function submitPeriod(
   periodLocalId: string,
   comments?: {
@@ -131,20 +141,43 @@ export async function submitPeriod(
     // ACTING_AS_TREASURER audit row is flushed by the Sync_Engine once this period
     // syncs (offline) / can be logged online by the caller.
     actingAsRole?: Role | null;
+    // Complete_Capture sign-off: Treasurer by default; anyone else = recorded exception.
+    signOff?: {
+      role: Role; // role signed off AS (Treasurer)
+      isException: boolean;
+      reason?: string | null;
+      completedByUserId: string;
+    };
   }
 ): Promise<void> {
   // Task 2: never submit a future-dated service.
-  const _fp = await db.periods.get(periodLocalId);
-  if (_fp && isFutureOacService(_fp.year, _fp.month, _fp.week)) {
+  const fp = await db.periods.get(periodLocalId);
+  if (fp && isFutureOacService(fp.year, fp.month, fp.week)) {
     throw new Error("Cannot submit a future-dated service.");
   }
+  const ts = now();
+  const revision = (fp?.completeCaptureRevision ?? 0) + 1;
+  const items = await getLineItems(periodLocalId);
+  const manifest = computeRequiredManifest(items, {
+    revision,
+    frozenAt: ts,
+    depositSlipKey: fp?.depositObjectKey ?? null,
+  });
   await db.periods.update(periodLocalId, {
     status: "Submitted",
-    submittedAt: now(),
+    submittedAt: ts,
     requestorComment: comments?.requestorComment ?? null,
     elderApprovalComment: comments?.elderApprovalComment ?? null,
     actingAsRole: comments?.actingAsRole ?? null,
-    updatedAt: now(),
+    // Complete_Capture freeze.
+    completeCaptureRevision: revision,
+    completedAt: ts,
+    completedByUserId: comments?.signOff?.completedByUserId ?? fp?.capturedByUserId ?? null,
+    signOffRole: comments?.signOff?.role ?? null,
+    signOffIsException: comments?.signOff?.isException ?? null,
+    signOffReason: comments?.signOff?.reason ?? null,
+    requiredManifest: manifest,
+    updatedAt: ts,
     localStatus: "pending",
   });
 }
@@ -174,6 +207,9 @@ export async function confirmR0NoTithing(input: {
   });
   const ts = now();
   const deviceId = await getOrCreateDeviceId();
+  const revision = (period.completeCaptureRevision ?? 0) + 1;
+  // R0 has no line items: an empty, balanced manifest frozen against this revision.
+  const manifest = computeRequiredManifest([], { revision, frozenAt: ts, depositSlipKey: null });
   await db.periods.update(period.localId, {
     status: "Submitted",
     submittedAt: ts,
@@ -181,6 +217,14 @@ export async function confirmR0NoTithing(input: {
     r0ConfirmedAt: ts,
     r0DeviceId: deviceId,
     actingAsRole: input.actingAsRole,
+    // Complete_Capture freeze for the zero-value submission.
+    completeCaptureRevision: revision,
+    completedAt: ts,
+    completedByUserId: input.userId,
+    signOffRole: "Treasurer",
+    signOffIsException: input.actingAsRole != null,
+    signOffReason: input.actingAsRole != null ? "No-tithing confirmation (acting as Treasurer)" : null,
+    requiredManifest: manifest,
     localStatus: "pending",
     updatedAt: ts,
   });
