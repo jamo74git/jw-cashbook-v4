@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 import { resolveAccess, canEnterCapture, canEnterAdmin, redirectTargetFor } from "@/lib/routeGuard";
 import type { UserHierarchyAccess } from "@/lib/types";
+import { startProgressiveDispatch } from "@/utils/syncBootstrap";
 import { ReloadPrompt } from "./pwa/ReloadPrompt";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { CapturePage } from "@/capture/CapturePage";
@@ -95,6 +96,11 @@ function RoleHome() {
 }
 
 export function App() {
+  // Progressive-dispatch controller. Inert while the feature gate is off (no listeners,
+  // no dispatch); safe to start unconditionally. Enabling is gated on actor-scoped
+  // authenticated replay + reconnect re-validation.
+  useEffect(() => startProgressiveDispatch(), []);
+
   return (
     <BrowserRouter>
       <Suspense fallback={<Loading />}>

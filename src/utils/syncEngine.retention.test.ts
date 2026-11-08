@@ -389,3 +389,22 @@ describe("Manual sync - congregation isolation", () => {
     expect((await db.periods.get("pB"))?.localStatus).toBe("pending"); // other congregation untouched
   });
 });
+
+describe("Actor isolation (shared-device user switch)", () => {
+  it("only dispatches the authenticated actor's queued work; another user's pending work is untouched", async () => {
+    await db.periods.add(makePeriod({ localId: "pU1", naturalKey: "cong1|2020-01-W1|AM", capturedByUserId: "user1", status: "Submitted", localStatus: "pending" }));
+    await db.periods.add(makePeriod({ localId: "pU2", naturalKey: "cong1|2020-01-W2|AM", week: 2, weekKey: "2020-01-W2", capturedByUserId: "user2", status: "Submitted", localStatus: "pending" }));
+    const r = await syncPending(new Date(), "cong1", { actorUserId: "user1" });
+    expect(r.attempted).toBe(1);
+    expect(r.synced).toBe(1);
+    expect((await db.periods.get("pU1"))?.localStatus).toBe("synced");
+    expect((await db.periods.get("pU2"))?.localStatus).toBe("pending"); // the other actor's work is never sent
+  });
+
+  it("fail-closed: requesting actor scoping with no authenticated actor dispatches nothing", async () => {
+    await db.periods.add(makePeriod({ status: "Submitted", localStatus: "pending" }));
+    const r = await syncPending(new Date(), "cong1", { actorUserId: "" });
+    expect(r.attempted).toBe(0);
+    expect((await db.periods.get("p1"))?.localStatus).toBe("pending");
+  });
+});

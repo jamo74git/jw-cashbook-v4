@@ -13,6 +13,8 @@
 import { createClient } from "@/lib/supabase/client";
 import { db, type LocalPeriod, type LocalLineItem } from "@/db/schema";
 import { isFutureOacService } from "@/lib/oacWeeks";
+import { filterQueueForActor } from "@/utils/syncActor";
+import { operationDedupeKey } from "@/lib/opLedger";
 
 const BASE_BACKOFF_MS = 2_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
@@ -208,6 +210,27 @@ function requireOneRow(data: { id?: string }[] | null, label: string): void {
 // (entity_id, action_type, user_id) for this event.
 async function flushActingAsAudit(supabase: SB, period: LocalPeriod, serverId: string): Promise<void> {
   if (!period.actingAsRole || period.actingAsAuditedAt) return;
+  const dedupeKey = operationDedupeKey("ACTING_AS_TREASURER", serverId, period.capturedByUserId);
+
+  // Idempotent replay (lost-ack safety): a prior attempt may have COMMITTED this event
+  // server-side before its acknowledgement was lost. A pre-insert lookup on the natural
+  // key (entity + action + user) finds that committed row and we mark it flushed WITHOUT
+  // re-inserting, so a retry can never create a duplicate ACTING_AS_TREASURER event.
+  // The DURABLE guarantee is the authored server-side unique key on
+  // (entity_id, action_type, user_id) — NOT YET APPLIED; verify with hosted testing.
+  const { data: existing, error: selErr } = await supabase
+    .from("audit_log")
+    .select("id")
+    .eq("entity_id", serverId)
+    .eq("action_type", "ACTING_AS_TREASURER")
+    .eq("user_id", period.capturedByUserId)
+    .limit(1);
+  if (selErr) throw new Error(`acting-as audit lookup failed: ${selErr.message}`);
+  if (existing && (existing as { id?: string }[]).length > 0) {
+    await db.periods.update(period.localId, { actingAsAuditedAt: new Date().toISOString() });
+    return;
+  }
+
   const auditedAt = new Date().toISOString();
   const { data: auditRows, error: auditErr } = await supabase.from("audit_log").insert({
     user_id: period.capturedByUserId,
@@ -216,7 +239,13 @@ async function flushActingAsAudit(supabase: SB, period: LocalPeriod, serverId: s
     entity_id: serverId,
     assumed_role: period.actingAsRole,
     comment: "Chairperson acting as Treasurer (offline capture)",
-    metadata: { acting_as_role: period.actingAsRole, actual_user_id: period.capturedByUserId, timestamp: auditedAt },
+    metadata: {
+      acting_as_role: period.actingAsRole,
+      actual_user_id: period.capturedByUserId,
+      timestamp: auditedAt,
+      // Stable dedupe key so the authored server unique index collapses replays.
+      dedupe_key: dedupeKey,
+    },
   }).select("id");
   if (auditErr) throw new Error(`acting-as audit insert failed: ${auditErr.message}`);
   requireOneRow(auditRows as { id?: string }[] | null, "acting-as audit");
@@ -247,17 +276,30 @@ async function finalizeLineItem(snapshot: LocalLineItem, ctx: ReconcileCtx): Pro
   });
 }
 
-export async function syncPending(now: Date = new Date(), congregationId?: string): Promise<SyncReport> {
+export async function syncPending(
+  now: Date = new Date(),
+  congregationId?: string,
+  opts?: {
+    // Actor isolation (PRIORITY 1 gate): when provided, ONLY the periods captured by
+    // this authenticated actor are dispatched. Required before AUTOMATIC/progressive
+    // dispatch is enabled so a shared device never sends a second user's queued work
+    // under the wrong JWT. When omitted, behaviour is unchanged (manual, congregation-scoped).
+    actorUserId?: string;
+  }
+): Promise<SyncReport> {
   const report: SyncReport = {
     attempted: 0, synced: 0, conflicts: 0, failed: 0, skipped: 0, blocked: 0, pending: 0,
   };
   if (!isOnline()) return report;
 
   const supabase = createClient();
-  const pending = (await db.periods.toArray())
-    .filter((p) => p.localStatus === "pending" || p.localStatus === "failed")
-    .filter((p) => !congregationId || p.congregationId === congregationId)
-    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  const queued = (await db.periods.toArray()).filter(
+    (p) => p.localStatus === "pending" || p.localStatus === "failed"
+  );
+  const pending = filterQueueForActor(queued, {
+    congregationId,
+    ...(opts && "actorUserId" in opts ? { actorUserId: opts.actorUserId } : {}),
+  }).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 
   for (const period of pending) {
     // Task 2: never auto-submit a future-dated service to the server (preserves existing future
