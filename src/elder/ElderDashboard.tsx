@@ -45,6 +45,7 @@ interface CongOption { id: string; name: string; code: string; }
 interface ElderPeriod { id: string; congregation_id: string; week: number; service: string; status: string; created_at: string; }
 interface ElderLineItem { id: string; period_id: string; section: string; is_officer: boolean; item_type: string; amount: number; officer_id: string | null; proof_status: string | null; }
 interface ElderOfficer { id: string; officer_code: string; congregation_id: string; }
+interface ElderSignoff { periodId: string; permCode: "A" | "O"; slot: number; actingReason: string | null; }
 interface AuditRow { date: string; congId: string; congregation: string; action: string; week: string; comment: string; by: string; }
 
 // ─── Derived view models ────────────────────────────────────────────────────
@@ -102,6 +103,10 @@ export function ElderDashboard() {
   const [items, setItems] = useState<ElderLineItem[]>([]);
   const [officers, setOfficers] = useState<ElderOfficer[]>([]);
   const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
+  // PRIORITY 2 — accepted sign-off rows for this month's periods (resilient: empty if the
+  // sign-off ledger is not yet provisioned). Drives the Elder REFERRAL surface.
+  const [signoffRows, setSignoffRows] = useState<ElderSignoff[]>([]);
+  const [escalated, setEscalated] = useState<Set<string>>(new Set());
 
   const [reviewCongId, setReviewCongId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -208,6 +213,32 @@ export function ElderDashboard() {
       if (!active) return;
       setOfficers((officerRows ?? []) as ElderOfficer[]);
 
+      // PRIORITY 2 referral data: accepted sign-off rows for this month's periods (best-
+      // effort; the ledger is schema-gated). Elder coordinates the missing second reviewer.
+      if (periodIds.length > 0) {
+        const { data: soRows, error: soErr } = await supabase
+          .from("cashbook_review_decision")
+          .select("period_id, signoff_perm_code, signoff_slot, acting_reason")
+          .in("period_id", periodIds)
+          .eq("decision", "signoff")
+          .eq("outcome", "accepted");
+        if (!active) return;
+        if (!soErr && soRows) {
+          setSignoffRows(
+            (soRows as Record<string, unknown>[]).map((r) => ({
+              periodId: String(r.period_id),
+              permCode: r.signoff_perm_code === "O" ? "O" : "A",
+              slot: Number(r.signoff_slot ?? 1),
+              actingReason: (r.acting_reason as string) ?? null,
+            }))
+          );
+        } else {
+          setSignoffRows([]);
+        }
+      } else {
+        setSignoffRows([]);
+      }
+
       // Risk & Audit: audit_log for these periods, resolving actor roles.
       let auditData: AuditRow[] = [];
       if (periodIds.length > 0) {
@@ -288,6 +319,30 @@ export function ElderDashboard() {
 
   const shownGov = scope === "all" ? govRows : govRows.filter((r) => r.congId === scope);
   const scopedCongs = scope === "all" ? congregations : congregations.filter((c) => c.id === scope);
+
+  // ── PRIORITY 2: Elder referral — captures PENDING a second valid sign-off ───
+  // A Submitted period with exactly ONE accepted sign-off needs an independent second
+  // reviewer. The Elder is the first point of contact: sees WHY it is pending and
+  // coordinates the missing reviewer. This is NOT an audit signature — no sign action here;
+  // the capture stays PENDING (no one-signature closure). Escalate to the Overseer only when
+  // the Elder cannot resolve it; that escalation changes no business state.
+  const referralRows = periods
+    .filter((p) => p.status === "Submitted")
+    .filter((p) => scope === "all" || p.congregation_id === scope)
+    .map((p) => {
+      const so = signoffRows.filter((s) => s.periodId === p.id);
+      const first = so.find((s) => s.slot === 1) ?? so[0];
+      const cong = congregations.find((c) => c.id === p.congregation_id);
+      return {
+        periodId: p.id,
+        congName: cong?.name ?? "",
+        week: p.week,
+        service: p.service,
+        count: so.length,
+        firstSignerRole: first ? (first.permCode === "A" ? "Auditor" : "Chairperson (acting auditor)") : null,
+      };
+    })
+    .filter((r) => r.count === 1);
 
   // Submit gate operates over the WHOLE eldership (batch, all congregations).
   const submitReady = govRows.length > 0 && govRows.every((r) => r.auditApproved > 0 && r.inProgress === 0 && r.awaitingAudit === 0);
@@ -550,6 +605,62 @@ export function ElderDashboard() {
                       {!submitReady && " Enabled once every congregation has approved weeks and none are in progress or awaiting audit."}
                     </p>
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Referral — captures pending a second valid sign-off (PRIORITY 2) */}
+              <Card className={referralRows.length > 0 ? "border-amber-300 bg-amber-50/30" : ""}>
+                <CardContent className="py-4">
+                  <h3 className="text-sm font-bold mb-1">Referrals — Awaiting Second Sign-Off</h3>
+                  <p className="text-[11px] text-muted-foreground mb-3">
+                    These captures have one sign-off and are <b>pending</b> an independent second reviewer. As Elder you are the
+                    first point of contact: coordinate the missing reviewer. Elder oversight is <b>not</b> an audit signature, so
+                    there is no sign action here — the capture stays pending until two valid sign-offs are obtained.
+                  </p>
+                  {referralRows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nothing awaiting a second sign-off this month.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {referralRows.map((r) => (
+                        <div key={r.periodId} className="rounded border bg-background px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="font-medium">{r.congName}</span>
+                              <span className="text-muted-foreground"> — Week {r.week} {r.service}</span>
+                            </div>
+                            <Badge variant="outline" className="text-[9px] bg-amber-50 text-amber-700 border-amber-300">1/2 — needs 2nd</Badge>
+                          </div>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Why pending: first sign-off given by <b>{r.firstSignerRole ?? "a reviewer"}</b>; missing an
+                            independent second sign-off (another Auditor, or a Chairperson acting-auditor with a recorded reason
+                            who took no part in preparing this capture).
+                          </p>
+                          <div className="mt-2 flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px]"
+                              onClick={() =>
+                                setEscalated((prev) => {
+                                  const n = new Set(prev);
+                                  if (n.has(r.periodId)) n.delete(r.periodId);
+                                  else n.add(r.periodId);
+                                  return n;
+                                })
+                              }
+                            >
+                              {escalated.has(r.periodId) ? "Escalated to Overseer" : "Escalate to Overseer"}
+                            </Button>
+                            {escalated.has(r.periodId) && (
+                              <span className="text-[10px] text-muted-foreground">
+                                Coordination escalated — this changes no status; the capture remains pending.
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

@@ -46,6 +46,9 @@ export function AuditDashboard() {
   const [pending, setPending] = useState<Period[]>([]);
   const [history, setHistory] = useState<Period[]>([]);
   const [loading, setLoading] = useState(true);
+  // PRIORITY 2: accepted sign-off count per pending period (0 = awaiting first, 1 = needs an
+  // independent second). Resilient — empty if the sign-off ledger is not yet provisioned.
+  const [signoffCounts, setSignoffCounts] = useState<Record<string, number>>({});
 
   const role = access?.role as Role | undefined;
 
@@ -79,7 +82,26 @@ export function AuditDashboard() {
           .order("year", { ascending: false })
           .order("month", { ascending: false })
           .order("week", { ascending: false });
-        setPending((pend ?? []) as Period[]);
+        const pendList = (pend ?? []) as Period[];
+        setPending(pendList);
+
+        // Sign-off counts for the pending queue (best-effort; table is schema-gated).
+        const pendIds = pendList.map((p) => p.id);
+        if (pendIds.length > 0) {
+          const { data: soRows, error: soErr } = await supabase
+            .from("cashbook_review_decision")
+            .select("period_id")
+            .in("period_id", pendIds)
+            .eq("decision", "signoff")
+            .eq("outcome", "accepted");
+          if (!soErr && soRows) {
+            const counts: Record<string, number> = {};
+            for (const r of soRows as { period_id: string }[]) {
+              counts[r.period_id] = (counts[r.period_id] ?? 0) + 1;
+            }
+            setSignoffCounts(counts);
+          }
+        }
 
         const { data: hist } = await supabase
           .from("cashbook_period")
@@ -101,6 +123,10 @@ export function AuditDashboard() {
   if (!role || !hasPermission(role, "audit.view_queue")) {
     return <p className="p-6 text-sm text-destructive">Access denied. Auditor role required.</p>;
   }
+
+  // PRIORITY 2 buckets: awaiting the FIRST sign-off vs needing an independent SECOND.
+  const awaitingFirst = pending.filter((p) => (signoffCounts[p.id] ?? 0) === 0).length;
+  const needsSecond = pending.filter((p) => (signoffCounts[p.id] ?? 0) === 1).length;
 
   return (
     <main className="mx-auto max-w-4xl p-6 space-y-6">
@@ -125,6 +151,12 @@ export function AuditDashboard() {
           <p className="text-sm text-muted-foreground">
             {pending.length === 0 ? "No services waiting for review." : "service(s) waiting for your review."}
           </p>
+          {pending.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded bg-orange-100 px-2 py-0.5 text-orange-800">{awaitingFirst} awaiting first sign-off</span>
+              <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-800">{needsSecond} needs independent second</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -148,9 +180,15 @@ export function AuditDashboard() {
                     </span>
                   )}
                 </div>
-                <Badge variant="outline" className="text-[9px] bg-orange-50 text-orange-700 border-orange-300">
-                  Pending
-                </Badge>
+                {(signoffCounts[p.id] ?? 0) === 1 ? (
+                  <Badge variant="outline" className="text-[9px] bg-amber-50 text-amber-700 border-amber-300">
+                    1/2 — needs 2nd
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[9px] bg-orange-50 text-orange-700 border-orange-300">
+                    0/2 Pending
+                  </Badge>
+                )}
               </button>
             ))}
           </CardContent>

@@ -16,6 +16,13 @@ import {
   logAuditAction,
 } from "@/lib/permissions";
 import {
+  signoffRoleKind,
+  signoffsForRevision,
+  pairHasAuditor,
+  signoffLabel,
+  type SignoffRecord,
+} from "@/audit/signoff";
+import {
   bankingView,
   sectionTotals,
   incomeTotal,
@@ -45,6 +52,10 @@ interface Period {
   submitted_at: string | null;
   submitted_by: string | null;
   audit_comment: string | null;
+  // Revision model (PRIORITY 2 / spec Task 2) — present only once the schema is applied.
+  // Default defensively so the page works before the migration lands.
+  server_revision?: number | null;
+  capture_generation?: number | null;
 }
 interface LineItem {
   id: string;
@@ -90,6 +101,11 @@ export function AuditReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [externallyChanged, setExternallyChanged] = useState(false);
   const [decidedAt, setDecidedAt] = useState<string | null>(null);
+  // PRIORITY 2 — accepted sign-off rows for this period (resilient: empty if the sign-off
+  // ledger is not yet provisioned) and the acting-auditor recorded reason.
+  const [signoffs, setSignoffs] = useState<SignoffRecord[]>([]);
+  const [actingReason, setActingReason] = useState("");
+  const [signoffBackendReady, setSignoffBackendReady] = useState(true);
 
   const [checkedBanking, setCheckedBanking] = useState(false);
   const [checkedCash, setCheckedCash] = useState(false);
@@ -98,7 +114,10 @@ export function AuditReviewPage() {
   const allChecked = checkedBanking && checkedCash && checkedBurial && checkedExpenses;
 
   const role = access?.role as Role | undefined;
-  const canApprove = role ? hasPermission(role, "audit.approve") : false;
+  // PRIORITY 2 — who may SIGN OFF is matrix-routed: Auditor (primary) or Chairperson
+  // (acting). Elder is NOT a signatory (its "O" is the separate drill-in override).
+  const signoffKind = role ? signoffRoleKind(role) : null;
+  const canSignoff = !!signoffKind;
   const canReject = role ? hasPermission(role, "audit.reject") : false;
 
   const load = useCallback(async () => {
@@ -141,6 +160,32 @@ export function AuditReviewPage() {
       setDecidedAt(dec && dec.length > 0 ? (dec[0] as { created_at: string }).created_at : null);
     } else {
       setDecidedAt(null);
+    }
+    // PRIORITY 2: load accepted sign-off rows from the (extended) decision ledger. The
+    // table is schema-gated (authored, NOT applied); degrade gracefully if it is absent so
+    // the page still renders — but FAIL CLOSED on the sign-off action (never auto-approve).
+    const { data: soData, error: soErr } = await supabase
+      .from("cashbook_review_decision")
+      .select("actor_user_id, signoff_perm_code, acting_as_auditor, acting_reason, capture_generation, reviewed_revision, signoff_slot")
+      .eq("period_id", periodId)
+      .eq("decision", "signoff")
+      .eq("outcome", "accepted");
+    if (soErr) {
+      setSignoffBackendReady(false);
+      setSignoffs([]);
+    } else {
+      setSignoffBackendReady(true);
+      setSignoffs(
+        ((soData ?? []) as Record<string, unknown>[]).map((r) => ({
+          actorUserId: String(r.actor_user_id),
+          permCode: (r.signoff_perm_code === "O" ? "O" : "A"),
+          actingAsAuditor: !!r.acting_as_auditor,
+          actingReason: (r.acting_reason as string) ?? null,
+          captureGeneration: Number(r.capture_generation ?? 1),
+          reviewedRevision: Number(r.reviewed_revision ?? 0),
+          slot: (Number(r.signoff_slot) === 2 ? 2 : 1),
+        }))
+      );
     }
     setLoading(false);
   }, [periodId]);
@@ -209,6 +254,33 @@ export function AuditReviewPage() {
     attachments.map((a) => a.line_item_id)
   );
 
+  // ── PRIORITY 2: two-person sign-off state for THIS exact revision ───────────
+  const serverRevision = Number(period.server_revision ?? 0);
+  const captureGeneration = Number(period.capture_generation ?? 1);
+  const currentSignoffs = signoffsForRevision(signoffs, captureGeneration, serverRevision);
+  const signoffCount = currentSignoffs.length;
+  const alreadySigned = !!access && currentSignoffs.some((s) => s.actorUserId === access.user_id);
+  const myPermCode: "A" | "O" | null = signoffKind === "primary" ? "A" : signoffKind === "acting" ? "O" : null;
+  const wouldBeSlot: 1 | 2 = signoffCount === 0 ? 1 : 2;
+  const acting = signoffKind === "acting";
+  // An acting-auditor sign-off may only be the SECOND sign-off, and a valid pair must still
+  // contain one real Auditor-"A". The four-section verify + Review_Ready gate the COMPLETING
+  // sign-off only (design §5). The first sign-off keeps the period Submitted.
+  const actingBlockedFirst = acting && wouldBeSlot === 1;
+  const pairMissingAuditor =
+    wouldBeSlot === 2 && myPermCode !== null && !pairHasAuditor([...currentSignoffs, { permCode: myPermCode }]);
+  const reasonMissing = acting && !actingReason.trim();
+  const completingVerifyBlocked = wouldBeSlot === 2 && (!allChecked || !reviewReadiness.ready);
+  const signoffDisabled =
+    processing ||
+    !canSignoff ||
+    !signoffBackendReady ||
+    alreadySigned ||
+    actingBlockedFirst ||
+    pairMissingAuditor ||
+    reasonMissing ||
+    completingVerifyBlocked;
+
   function back() {
     const r = access?.role;
     if (r === "Elder") navigate("/elder");
@@ -216,15 +288,69 @@ export function AuditReviewPage() {
     else navigate("/audit");
   }
 
-  async function decide(kind: "approve" | "reject") {
-    if (!period || !access) return;
-    // Approval requires Review_Ready (evidence + balance for the exact revision); rejection
-    // only needs an actor + reason + the reviewed revision (design §6.3), so it is NOT gated here.
-    if (kind === "approve" && (!canApprove || !allChecked || !reviewReadiness.ready)) return;
-    if (kind === "reject" && (!canReject || !comment.trim())) return;
+  // PRIORITY 2: a sign-off is a call to the single decision authority (the extended
+  // `cashbook_review_decision` RPC). The server records the sign-off and — ONLY on the
+  // second valid, independent sign-off of this exact revision — flips the period to
+  // AuditApproved inside one transaction. The client NEVER writes AuditApproved directly
+  // (a direct Data-API update is rejected server-side by the trigger guard). Fail-closed:
+  // any RPC error blocks and reloads; there is no fallback that could auto-approve.
+  async function submitSignoff() {
+    if (!period || !access || signoffDisabled) return;
+    if (acting) {
+      if (!window.confirm("A Chairperson acting-auditor sign-off is recorded as a SELF_REVIEW_EXCEPTION. Continue?")) return;
+    }
+    setProcessing(true);
+    setError(null);
+    const verification = {
+      banking: checkedBanking,
+      cash: checkedCash,
+      burial: checkedBurial,
+      expenses: checkedExpenses,
+    };
+    const fingerprint = JSON.stringify({ rev: serverRevision, gen: captureGeneration, income, expenses: expensesT, lines: items.length });
+    const { data, error: e } = await supabase.rpc("cashbook_review_decision", {
+      p_decision_op_id: crypto.randomUUID(),
+      p_period_id: period.id,
+      p_capture_generation: captureGeneration,
+      p_decision: "signoff",
+      p_reviewed_revision: serverRevision,
+      p_payload_fingerprint: fingerprint,
+      p_acting_as_auditor: acting,
+      p_acting_reason: acting ? actingReason.trim() : null,
+      p_reason: comment || null,
+      p_verification: verification,
+    });
+    if (e) {
+      // Fail-closed: surface the server's definitive failure (involvement, already-signed,
+      // not-ready, stale, or "backend not provisioned"); do NOT fall back to a direct write.
+      setError(
+        signoffBackendReady
+          ? e.message
+          : "Two-person sign-off is not yet provisioned on this backend (migration pending)."
+      );
+      setProcessing(false);
+      await load();
+      return;
+    }
+    setProcessing(false);
+    const status = (data as { status?: string } | null)?.status;
+    if (status === "AuditApproved") {
+      back();
+    } else {
+      // First sign-off recorded; stay to show "1 of 2" and let a second reviewer sign.
+      setActingReason("");
+      await load();
+    }
+  }
 
-    const permKey = kind === "approve" ? "audit.approve" : "audit.reject";
-    if (role && isOverrideAction(role, permKey)) {
+  // Rejection is unchanged from the single-decision path: an actor + a mandatory reason +
+  // the reviewed revision. It is NOT gated on Review_Ready or two sign-offs, and the trigger
+  // guard does not touch the Rejected transition.
+  async function decide() {
+    if (!period || !access) return;
+    if (!canReject || !comment.trim()) return;
+
+    if (role && isOverrideAction(role, "audit.reject")) {
       if (!window.confirm("SELF_REVIEW_EXCEPTION will be logged. Continue?")) return;
       await logSelfReviewException({
         userId: access.user_id,
@@ -236,13 +362,11 @@ export function AuditReviewPage() {
 
     setProcessing(true);
     setError(null);
-    const newStatus = kind === "approve" ? "AuditApproved" : "Rejected";
-    const auditComment = kind === "approve" ? comment || "Approved" : comment;
 
     // Optimistic row-lock: only update rows still Submitted.
     const { data, error: e } = await supabase
       .from("cashbook_period")
-      .update({ status: newStatus, audit_comment: auditComment })
+      .update({ status: "Rejected", audit_comment: comment })
       .eq("id", period.id)
       .eq("status", "Submitted")
       .select("id");
@@ -260,16 +384,16 @@ export function AuditReviewPage() {
     }
     await logAuditAction({
       userId: access.user_id,
-      actionType: kind === "approve" ? "AUDIT_APPROVE" : "AUDIT_REJECT",
+      actionType: "AUDIT_REJECT",
       entityType: "cashbook_period",
       entityId: period.id,
-      comment: auditComment,
+      comment,
     });
     setProcessing(false);
     back();
   }
 
-  const decisionOpen = period.status === "Submitted" && !externallyChanged && (canApprove || canReject);
+  const decisionOpen = period.status === "Submitted" && !externallyChanged && (canSignoff || canReject);
 
   const bankingRows = (group: LineItem[], label: string) =>
     group.length === 0 ? null : (
@@ -514,34 +638,112 @@ export function AuditReviewPage() {
         </div>
       )}
 
-      {/* Audit decision */}
+      {/* Audit decision — TWO-PERSON SIGN-OFF (PRIORITY 2) */}
       {decisionOpen && (
-        <Card className={allChecked && reviewReadiness.ready ? "border-green-300" : "border-orange-200"}>
+        <Card className={signoffCount >= 1 ? "border-green-300" : "border-orange-200"}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs">Audit Decision</CardTitle>
-            {!allChecked && <p className="text-[10px] text-orange-600 dark:text-orange-400">Verify all four sections before approving.</p>}
-            {allChecked && !reviewReadiness.ready && <p className="text-[10px] text-orange-600 dark:text-orange-400">Not ready for audit: evidence and/or balance are incomplete for this revision.</p>}
+            <CardTitle className="text-xs">Audit Decision — Two-Person Sign-Off</CardTitle>
+            <p className="text-[10px] text-muted-foreground">
+              Two independent, eligible sign-offs are required on this revision. The period becomes
+              <b> AuditApproved</b> only when the second valid sign-off is recorded.
+            </p>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* Sign-off progress */}
+            <div className="rounded border bg-muted/30 px-3 py-2 text-[11px] space-y-1" role="status">
+              <p className="font-medium">Sign-offs: {signoffCount} of 2</p>
+              {currentSignoffs.length === 0 ? (
+                <p className="text-muted-foreground">Awaiting the first sign-off.</p>
+              ) : (
+                currentSignoffs
+                  .slice()
+                  .sort((a, b) => a.slot - b.slot)
+                  .map((s, i) => (
+                    <p key={i} className="text-green-700 dark:text-green-400">
+                      ✓ {signoffLabel(s, s.actorUserId === access?.user_id ? "you" : undefined)}
+                      {s.actingAsAuditor && s.actingReason ? ` — reason: ${s.actingReason}` : ""}
+                    </p>
+                  ))
+              )}
+            </div>
+
+            {!signoffBackendReady && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400" role="alert">
+                Two-person sign-off is not yet provisioned on this backend (migration pending). Sign-off is disabled.
+              </p>
+            )}
+
+            {/* Four-section verification — gates the COMPLETING sign-off (design §5). */}
             <div className="flex gap-3 text-[10px]">
               <span className={checkedBanking ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Banking</span>
               <span className={checkedCash ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Cash</span>
               <span className={checkedBurial ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Burial</span>
               <span className={checkedExpenses ? "text-green-700 dark:text-green-400" : "text-muted-foreground"}>✓ Expenses</span>
             </div>
+
+            {/* Signatory guidance */}
+            {canSignoff ? (
+              <>
+                {alreadySigned && (
+                  <p className="text-[11px] text-muted-foreground">
+                    You have already signed off. An <b>independent</b> second reviewer must give the second sign-off.
+                  </p>
+                )}
+                {actingBlockedFirst && (
+                  <p className="text-[11px] text-orange-600 dark:text-orange-400">
+                    An acting-auditor sign-off can only be the <b>second</b> sign-off — a real Auditor must sign first.
+                  </p>
+                )}
+                {pairMissingAuditor && !actingBlockedFirst && (
+                  <p className="text-[11px] text-orange-600 dark:text-orange-400">
+                    A valid pair must include one real Auditor sign-off.
+                  </p>
+                )}
+                {wouldBeSlot === 2 && completingVerifyBlocked && !alreadySigned && (
+                  <p className="text-[11px] text-orange-600 dark:text-orange-400">
+                    The completing sign-off needs all four sections verified and the revision Review-Ready.
+                  </p>
+                )}
+                {acting && !alreadySigned && !actingBlockedFirst && (
+                  <div className="space-y-1">
+                    <Label className="text-xs" htmlFor="acting-reason">Acting-auditor reason (required — e.g. only one auditor available)</Label>
+                    <Input
+                      id="acting-reason"
+                      className="h-9 text-xs"
+                      value={actingReason}
+                      onChange={(e) => setActingReason(e.target.value)}
+                      placeholder="Why a Chairperson is giving the second sign-off…"
+                    />
+                    <p className="text-[10px] text-muted-foreground">Recorded as a SELF_REVIEW_EXCEPTION in the audit log.</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                Your role may review but <b>cannot give an audit sign-off</b> (oversight is not a signature). Coordinate an
+                independent second reviewer; the capture stays pending until two valid sign-offs are obtained.
+              </p>
+            )}
+
             <div className="space-y-1">
               <Label className="text-xs">Comment {canReject ? "(mandatory for rejection)" : "(optional)"}</Label>
               <Input className="h-9 text-xs" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Audit comment…" />
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
             <div className="flex gap-3">
-              {canApprove && (
-                <Button size="sm" className="bg-green-700 text-white hover:bg-green-800" onClick={() => void decide("approve")} disabled={processing || !allChecked || !reviewReadiness.ready}>
-                  {processing ? "…" : "Approve"}
+              {canSignoff && !alreadySigned && (
+                <Button size="sm" className="bg-green-700 text-white hover:bg-green-800" onClick={() => void submitSignoff()} disabled={signoffDisabled}>
+                  {processing
+                    ? "…"
+                    : wouldBeSlot === 1
+                    ? "Give sign-off (1 of 2)"
+                    : acting
+                    ? "Second sign-off (acting auditor)"
+                    : "Second sign-off — approve"}
                 </Button>
               )}
               {canReject && (
-                <Button size="sm" variant="destructive" onClick={() => void decide("reject")} disabled={processing || !comment.trim()}>
+                <Button size="sm" variant="destructive" onClick={() => void decide()} disabled={processing || !comment.trim()}>
                   {processing ? "…" : "Reject"}
                 </Button>
               )}
