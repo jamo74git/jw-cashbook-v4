@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { getCurrentIdentity, type CurrentIdentity } from "@/lib/identity";
 import { resolveHierarchyChain, type ChainSegment } from "@/lib/hierarchyChain";
 import { setOfflinePinDismissed } from "@/lib/deviceId";
+import { ROLE_GUIDE_OPEN_EVENT } from "@/lib/roleGuidePrefs";
 import {
   signOut as clearOfflineSession,
   hasPin,
@@ -183,6 +184,13 @@ export function AppHeader() {
                 </div>
                 <button onClick={() => { setShowMenu(false); navigate("/settings"); }} className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted">
                   Settings
+                </button>
+                {/* Help: re-open the dismissible "What you can do here" role guide. */}
+                <button
+                  onClick={() => { setShowMenu(false); window.dispatchEvent(new Event(ROLE_GUIDE_OPEN_EVENT)); }}
+                  className="w-full text-left px-3 py-2 text-sm rounded-sm hover:bg-muted"
+                >
+                  Help
                 </button>
                 {identity?.isOnline &&
                   (userHasPin ? (

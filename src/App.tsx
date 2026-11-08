@@ -10,6 +10,8 @@ import { resolveAccess, canEnterCapture, canEnterAdmin, redirectTargetFor } from
 import type { UserHierarchyAccess } from "@/lib/types";
 import { startProgressiveDispatch } from "@/utils/syncBootstrap";
 import { ReloadPrompt } from "./pwa/ReloadPrompt";
+import { RoleGuideHost } from "@/components/RoleGuideHost";
+import { LandingPage } from "@/features/landing/LandingPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { CapturePage } from "@/capture/CapturePage";
 import { AppShell } from "@/components/AppShell";
@@ -105,7 +107,7 @@ export function App() {
     <BrowserRouter>
       <Suspense fallback={<Loading />}>
         <Routes>
-          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
 
           <Route
@@ -178,6 +180,8 @@ export function App() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Suspense>
+      {/* Dismissible post-sign-in role guide (non-compulsory; reachable via Help). */}
+      <RoleGuideHost />
       <ReloadPrompt />
     </BrowserRouter>
   );
