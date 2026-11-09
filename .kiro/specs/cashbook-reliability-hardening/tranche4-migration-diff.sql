@@ -273,9 +273,9 @@ ROLLBACK;  -- NOT APPLIED — diff ends in ROLLBACK so an accidental run is a no
 --   proofs_insert_capture  (INSERT, uploader + exact editable period + capture role)
 --   proofs_delete_correction (DELETE, capture role + editable period + no live references)
 --   (no UPDATE policy on cashbook-proofs — overwrite denied by omission)
--- NET storage.objects proof policy count: 7 -> 7 (4 unscoped replaced by 3 scoped +
---   the 3 underscore policies rewritten in place). Plus the cashbook_attachment row
---   policies and dedupe index in the authored migration.
+-- NET storage.objects proof policy count: 7 -> 6 (4 unscoped hyphen-bucket policies
+--   replaced by 3 scoped; the 3 underscore-bucket policies rewritten in place). Plus the
+--   cashbook_attachment row policies and dedupe index in the authored migration.
 -- ============================================================================
 -- END — NOT APPLIED. Diff of policy-definitions.sql (BEFORE, 2026-11-04) ->
 -- supabase/migrations/20261012010000_tranche4_proof_access.sql (AFTER).

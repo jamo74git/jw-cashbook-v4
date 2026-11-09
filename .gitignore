@@ -32,3 +32,13 @@ Thumbs.db
 
 # Kiro MCP config (may contain secrets / tokens)
 .kiro/settings/mcp.json
+
+# OS
+desktop.ini
+
+# Kiro spec scratch evidence (transient run output — not durable)
+.kiro/specs/**/ev_*
+.kiro/specs/**/_t4*
+.kiro/specs/**/_t1*
+.kiro/specs/**/_tranche1*
+.kiro/specs/**/_baseline_*
