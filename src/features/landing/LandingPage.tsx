@@ -93,6 +93,28 @@ export function LandingPage() {
               </Card>
             ))}
           </div>
+
+          {/* Beyond the weekly audit — quieter secondary strip */}
+          <div className="rounded-md border border-dashed bg-muted/30 p-4">
+            <h3 className="mb-3 text-center text-sm font-medium text-foreground">
+              Beyond the weekly audit
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="text-sm font-medium text-foreground">Elder review</p>
+                <p className="text-sm text-muted-foreground">
+                  The assigned Elder checks the congregation&apos;s submission before it goes
+                  to the Overseer.
+                </p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">Overseer submission</p>
+                <p className="text-sm text-muted-foreground">
+                  The Overseer reviews the submission and forwards it to DHO.
+                </p>
+              </div>
+            </div>
+          </div>
         </section>
 
         {/* Roles — explicit about sign-off */}
