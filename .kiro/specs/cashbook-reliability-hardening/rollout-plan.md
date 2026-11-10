@@ -25,18 +25,31 @@
 
 ## 2. Git / Vercel preflight (read-only)
 
-### Release identities to track (fill (c) and (d) from Vercel)
+### Release identities (Vercel values CONFIRMED by the project owner)
 - **(a) App candidate:** `0ad13865`
-- **(b) Post-housekeeping HEAD:** `e2466299` (the exact commit to Preview if you deploy this branch)
-- **(c) Production SHA (currently live on Vercel):** UNKNOWN from here — read it at
-  **Vercel → Project → Deployments** (the current Production deployment shows its Git SHA).
-- **(d) Vercel Production branch:** UNKNOWN from here — read it at
-  **Vercel → Project → Settings → Environments → Production → Branch Tracking.**
-  (GitHub default is `main` — `origin/HEAD -> origin/main` — but the Vercel Production branch is a
-  dashboard setting and must be confirmed, not inferred.)
+- **(b) Post-housekeeping HEAD:** `e2466299`; current local HEAD `1c93b662` adds only this
+  rollout-plan doc (and any later docs-only commit).
+- **(c) Current Production deployment (Vercel):**
+  - Deployment ID `dpl_6FXTY2HFVDf561mcYKTqJMJjhVa4` (short `6FXTY2HFV`)
+  - Created Jul 23 by `jamo74git`; Environment: Production, Current
+  - Source branch: `main`
+  - Type: **Redeploy** of "feat: submission summary per-week values"
+  - **No Git SHA is shown** — a Vercel Redeploy artifact; the Source tab shows only the file tree
+    (package.json etc). The exact Git commit of the live Production build is therefore NOT
+    independently verified. Do not assume it equals `origin/main` (`d34a3f51`).
+  - Checked at: `vercel.com/mcom1/jw-cashbook-v4/6FXTY2HFVDf561mcYKTqJMJjhVa4/source`
+    (Project → Deployments).
+- **(d) Vercel Production branch:** **`main`** — confirmed at
+  Project → Settings → Environments → Production → Branch Tracking.
+  GitHub repo `jamo74git/jw-cashbook-v4` is connected (Project Settings → Git; connected Jul 12).
+  GitHub default branch is also `main`.
+- **Consequence:** `feat/treasurer-dashboard-v1` is NOT the Production branch, so pushing it
+  creates a **Preview** deployment only. No Production deploy occurs unless `main` changes.
+  A push does not apply DB migrations (build is `vite build` -> `dist` only).
 
-> A clean fast-forward does NOT settle the release. Once you confirm (c) and (d), re-evaluate "what
-> should be released" against the ACTUAL Production branch — not against `main` by assumption.
+> A clean fast-forward does NOT settle the release. Production tracks `main`, and the live
+> Production artifact is a Redeploy with no verifiable SHA. Deciding what to release (merge to
+> `main`) is a separate, explicit later step — not part of pushing the feature branch.
 
 ### Remote / branch facts (verified read-only)
 - Remote `origin` = `github.com/jamo74git/jw-cashbook-v4`. Remote branches: `main` (default),
