@@ -1,0 +1,390 @@
+﻿# Tranche 3 — Remediation Package (PROPOSAL ONLY — NOTHING APPLIED)
+
+> Status: DRAFT artefact. No app code, DB, storage bucket, migration, or Edge Function
+> has been changed, run, or deployed as part of this package. Everything below is a
+> proposal plus a draft migration (see `tranche3-migration-draft.sql`, marked NOT APPLIED).
+>
+> Source-of-truth note: the **deployed** Supabase project (`cwdyixafvylzgtpsfmwr`,
+> "jw-cashbook-v4", ACTIVE) is authoritative. The repo `docs/migrations/*` and
+> `supabase/*.sql` do NOT match the deployed schema — do a `supabase db pull` before
+> authoring any real migration so the local baseline reflects reality.
+
+## 0. Scope and honest baseline
+
+- Baselines retained unchanged: `tsc --noEmit` exit 0 (0 errors); vitest 33 passed /
+  6 files; eslint exit 1 (73 files, 1 error + 6 warnings). This package proposes no
+  change to those numbers and does NOT fix unrelated lint findings.
+- Evidence referenced here is the captured SQL output recorded in
+  `tranche2-inspection.md` and the baseline/evidence files in this folder. Where
+  attribution (pre-existing vs regression) is not supported by history it is marked
+  "attribution unknown".
+- The online capture path worked before the offline / multi-role hardening. That is a
+  regression reference only; it is NOT evidence that the backend was secure.
+
+---
+
+## 1. Area 1 — Proof protection
+
+### 1.1 Observed state (evidence)
+
+Two buckets exist:
+
+- `cashbook_proofs` (underscore): `public = FALSE`, mime `image/*`. Object policies are
+  scoped and expect `storage.foldername(name)[1] = congregation_id`.
+- `cashbook-proofs` (hyphen): `public = TRUE`. Policies: "Allow public reads" (role
+  `public`) and "Allow authenticated uploads" whose `with_check` is only
+  `bucket_id = 'cashbook-proofs'` (no hierarchy, no path, no role).
+
+The app uses the **hyphen / public** bucket: `syncEngine.ts` sets
+`PROOF_BUCKET = "cashbook-proofs"` and returns `getPublicUrl(...)`. Upload object path is:
+
+```
+${congregationId}/${year}/${MM}/${service}_${weekKey}/${capturedByUserId}/${ts}-${suffix}.${ext}
+```
+
+So `foldername(name)[1]` is already the congregation id (good), but the live bucket
+neither enforces that nor restricts reads. `cashbook_attachment` is then inserted with
+`{ line_item_id, file_url, transaction_date, bank_reference, congregation_id,
+uploaded_by = capturedByUserId }`.
+
+Parent linkage: `cashbook_attachment` has **no** `period_id`. The only reliable link to
+a period is `attachment.line_item_id -> cashbook_line_item.period_id`. The object folder
+name and the client-supplied `congregation_id` on the attachment are NOT a trustworthy
+linkage — they are client-provided and must be validated server-side, not believed.
+
+Priority: **P1 (critical)** — financial proof images are world-readable via a public
+bucket and public URLs; uploads are unauthenticated beyond "is logged in".
+
+### 1.2 Proposed change (recommendation)
+
+**Recommended: keep the existing hyphen path but make the bucket private and gate it.**
+This avoids a data migration of existing object keys and keeps the app's current path
+layout (`foldername[1] = congregation_id`) which already matches the private-bucket
+policy shape on `cashbook_proofs`.
+
+Changes:
+
+1. Set `cashbook-proofs.public = FALSE`.
+2. Drop "Allow public reads" and the permissive "Allow authenticated uploads" policy.
+3. Add scoped storage.objects policies on `bucket_id = 'cashbook-proofs'`:
+   - INSERT (upload): `auth.uid()` present AND
+     `(foldername(name))[1]::uuid IN (SELECT get_my_hierarchy_ids())`.
+   - SELECT (read): same hierarchy predicate. (This is what makes signed-URL issuance
+     safe — only an in-scope user can mint a URL.)
+   - UPDATE/DELETE: congregation-scoped same as INSERT; no public.
+4. App read path: replace `getPublicUrl(...)` with `createSignedUrl(path, ttl)` at the
+   point proofs are displayed. Store the **object path** (not a public URL) in
+   `cashbook_attachment.file_url`, or add/keep a path column; signed URLs are minted
+   on demand. (Open decision OD-1: path-vs-URL column — see §6.)
+
+> Alternative considered: migrate objects to the underscore `cashbook_proofs` bucket.
+> Rejected as the primary because it requires copying/renaming existing objects and
+> rewriting stored `file_url`s, with no security benefit over hardening the hyphen
+> bucket. Keep as fallback only if there is a reason to abandon the hyphen bucket.
+
+### 1.3 Proof -> parent validation (server-side, not folder naming)
+
+A storage policy cannot cheaply join to the line-item/period, so the trustworthy
+linkage is enforced on the **attachment insert**, not on the object path:
+
+- Replace the direct client insert into `cashbook_attachment` with an RPC (or a
+  BEFORE INSERT trigger) that:
+  - sets `uploaded_by = auth.uid()` (ignore client value);
+  - derives `congregation_id` from the parent: look up
+    `cashbook_line_item.period_id -> cashbook_period.congregation_id` and require the
+    inserted `congregation_id` to equal it (or overwrite it from the parent);
+  - requires the resolved congregation to be in `get_my_hierarchy_ids()`;
+  - requires the parent period to be **editable** (status not locked — see Area 2);
+  - requires the object to exist under `foldername[1] = <that congregation_id>`.
+
+This makes linkage depend on the actual `line_item_id -> period` chain and the real
+object path prefix, never on the client-supplied folder string or attachment ids alone.
+
+### 1.4 Does not break permitted uploads
+
+A Treasurer/Chairperson/Elder capturing for an in-scope congregation into an editable
+period still uploads and reads normally: their congregation is in
+`get_my_hierarchy_ids()`, the path prefix already encodes that congregation, and the
+period is editable during capture. Only out-of-scope reads/uploads and
+locked-period attachments are denied.
+
+---
+
+## 2. Area 2 — Financial-write / audit integrity
+
+### 2.1 Observed state (evidence)
+
+- `cashbook_period` has **no lock column** and its RLS is
+  `congregation_id IN (SELECT get_my_hierarchy_ids())` for both SELECT and ALL — so any
+  in-hierarchy user can UPDATE/DELETE a period in **any** status, including
+  `AuditApproved` / `SubmittedToOverseer` / `SubmittedToHO` / `HOReviewed`.
+- `cashbook_line_item` RLS cascades off the parent period congregation only — same
+  problem: approved/submitted line items remain mutable.
+- There are **no triggers** on any of the five cashbook tables. Approval, submission,
+  and audit are done as separate client-issued UPDATE + INSERT statements, so they are
+  **not atomic** and the status/audit pair can diverge.
+- `audit_log`: INSERT `with_check = true`, SELECT `qual = true`, and there is **no**
+  UPDATE/DELETE policy. So any authenticated user can write arbitrary/forged audit rows
+  and read everyone's audit trail.
+- Grants: `authenticated` holds `DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE,
+  UPDATE` on all five cashbook tables. `TRUNCATE` and `TRIGGER` to `authenticated` are
+  unnecessary and dangerous (a client role can truncate financial tables).
+- `get_or_create_period(p_congregation_id, p_week_key, p_service, p_user_id)` is
+  SECURITY DEFINER: raises 42501 if caller is not service_role and congregation not in
+  `get_my_hierarchy_ids()`, then inserts a Draft with `submitted_by = p_user_id`.
+  **`p_user_id` is never validated against `auth.uid()`** — a caller can attribute a
+  period to another user. No role gate, no lock gate.
+- `get_my_hierarchy_ids()` returns the set of congregation ids the user can reach
+  (Congregation/Overseership/Apostleship/District/Eldership/HO). It answers "which
+  congregations" — it does NOT answer "may this user perform this action". Treating
+  membership as blanket permission is the core over-grant.
+- `get_my_role()` returns the highest-rank active role, anon hard-blocked.
+
+Priority: **P2 (audit forgeable/readable)**, **P3 (approved rows mutable + non-atomic
+approval/audit)** — both critical.
+
+### 2.2 Proposed changes
+
+**(a) Status-aware write lock on periods and children.**
+Add a predicate so writes to a period (and its line items / attachments) are denied once
+the period is locked. "Locked" = status in (`Submitted`, `AuditApproved`,
+`SubmittedToOverseer`, `SubmittedToHO`, `HOReviewed`). The only transitions out of a
+locked state go through an authorised server function (approve / reject-return /
+reopen), never a raw client UPDATE.
+
+Two implementation options (OD-2 in §6):
+- Option A (RLS USING/WITH CHECK on status) — simplest, but RLS cannot easily allow
+  "only the status column may change, only via the approve path". Risk of lockout of
+  legitimate transitions.
+- Option B (recommended): keep RLS for row scope, move all state transitions and
+  edits-after-draft behind SECURITY DEFINER RPCs, and add a BEFORE UPDATE/DELETE
+  trigger that rejects direct client writes to a locked period unless the session is
+  inside an approved RPC (e.g. a `set_config` guard the RPC sets). This gives atomicity
+  and a single choke point.
+
+**(b) Server-generated, atomic approval / submission.**
+Replace the client "update status then insert audit" pairs with SECURITY DEFINER RPCs,
+one per transition, each of which in a single transaction:
+- binds actor = `auth.uid()` (never a client `p_user_id`);
+- re-checks role via `get_my_role()` AND the specific permission for that action (not
+  mere hierarchy membership);
+- verifies the current status is the expected pre-state (optimistic `eq(status, ...)`);
+- writes the new status AND the audit row together.
+
+Proposed RPCs (names illustrative): `audit_approve_period`, `audit_reject_period`
+(return-for-correction, preserves reason + history), `submit_period_to_overseer`,
+`overseer_review_period`, `submit_period_to_ho`, `ho_review_period`. Reject does NOT
+delete history; it returns the period to the correctable state and records the reason
+visibly (see Area 3 for the auditor-reject semantics and the overseer enum constraint).
+
+**(c) Validate `p_user_id` in `get_or_create_period`.**
+Require `p_user_id = auth.uid()` (or drop the parameter and use `auth.uid()` directly)
+when caller is not service_role. Keep the existing hierarchy check.
+
+**(d) Lock down `audit_log`.**
+- INSERT: `with_check` binds `user_id = auth.uid()` (or only allow inserts via the
+  transition RPCs and revoke direct INSERT from `authenticated`). No forged actor.
+- SELECT: scope to the reader's hierarchy (`congregation_id IN get_my_hierarchy_ids()`
+  or role-based), not `true`.
+- Keep no UPDATE/DELETE policy (append-only) — that part is already correct.
+
+**(e) Revoke dangerous grants.**
+`REVOKE TRUNCATE, TRIGGER ON <five cashbook tables> FROM authenticated;` Review whether
+direct `DELETE`/`UPDATE`/`INSERT` should also be revoked in favour of RPC-only writes
+(OD-3). At minimum TRUNCATE and TRIGGER must go.
+
+**(f) No new self-review authorisation.**
+These changes do not create any new self-review or acting-as path. The existing
+acting-as / self-review controls and their audit trail remain exactly as they are; the
+transition RPCs must preserve (not bypass) them.
+
+### 2.3 Auditor reject = return-for-correction
+
+`audit_reject_period` must: set status back to the correctable state, persist the
+rejection reason (existing `audit_comment` / `elder_approval_comment` fields), and append
+an `AUDIT_REJECT` audit row — without discarding prior history or line items. The reason
+must remain visible to the capturer. This is a return-for-correction, not a terminal
+state and not a delete.
+
+---
+
+## 3. Area 3 — Overseer compatibility
+
+### 3.1 Observed state (evidence)
+
+Deployed `period_status` enum = `{Draft, Submitted, AuditApproved, SubmittedToOverseer,
+Rejected, SubmittedToHO, HOReviewed}`. There is **no** `OverseerApproved` and no
+`OverseerRejected`.
+
+`src/review/OverseerReview.tsx`:
+- `decide()` does `.update({ status: "OverseerApproved" | "OverseerRejected" })
+  .eq("id", periodId).eq("status", "SubmittedToOverseer").select("id")` then a separate
+  `logAuditAction` (`OVERSEER_APPROVE` / `OVERSEER_REJECT`). Reject requires a
+  `window.prompt` comment and sets `overseer_comment`.
+- `handleSubmitToHO()` updates `OverseerApproved -> SubmittedToHO` + `MONTH_SUBMIT_TO_HO`.
+- Gated via `hasPermission(role, "month.overseer_approve" | "month.overseer_reject" |
+  "month.submit_to_ho")`.
+
+Because the enum lacks those two labels, every `decide()` write **fails at runtime**
+against the deployed DB. This is defect **D-8 / P5**. Attribution: **unknown** — the
+history available does not establish whether these labels ever existed in a prior
+deployed enum or were introduced by the multi-role hardening.
+
+`can_capture_period(...)` (the week-sequencing function: week 1 always allowed, else
+previous week must be `AuditApproved`) exists in the DB but **is not called anywhere in
+`src/`** (grep: no matches). So its sequencing rule is **not enforced by the app** today.
+Do not assume it is enforced; document it as unwired.
+
+### 3.2 Proposed change (smallest correction)
+
+Do **not** add `OverseerApproved` / `OverseerRejected` to the enum, and do **not**
+introduce an HO-rejection workflow (not established). Also do not use enum sort order as
+workflow rank.
+
+The smallest correction is to make `OverseerReview.tsx` use only deployed enum values.
+But "overseer approve" and "overseer reject" have no obvious existing target, so this
+requires a **decision**, not an auto-pick (OD-4):
+
+- Approve mapping options:
+  - (A1) Overseer approval advances directly `SubmittedToOverseer -> SubmittedToHO`
+    (fold the approve+submit-to-HO into one step; `handleSubmitToHO` becomes redundant).
+  - (A2) Keep approve as a no-status-change event (audit-only `OVERSEER_APPROVE`), and
+    keep the separate `handleSubmitToHO` doing `SubmittedToOverseer -> SubmittedToHO`.
+- Reject mapping options:
+  - (R1) Use existing `Rejected` status (shared return-for-correction state), recording
+    `OVERSEER_REJECT` + reason in `overseer_comment`.
+  - (R2) Return to an earlier correctable status (e.g. back to the capture/audit stage)
+    — needs product confirmation of who corrects an overseer rejection.
+
+Whatever is chosen, the write must become part of the atomic transition RPC from Area 2
+(status + audit together), with the optimistic `eq(status,'SubmittedToOverseer')` guard
+preserved. Until a mapping is chosen, `OverseerReview.decide()` remains broken; this
+package does not apply a guess.
+
+`can_capture_period`: either wire it into the capture guard (if week-sequencing is
+desired) or leave it unused and remove it later — but record that today it enforces
+nothing. No change proposed in this package beyond documenting it (OD-5).
+
+---
+
+## 4. Affected callers / files (for the proposed changes)
+
+- `src/utils/syncEngine.ts` — `PROOF_BUCKET`, `uploadProof` (switch read to signed URL;
+  route attachment insert through RPC/trigger). Upload path layout unchanged.
+- Proof display component(s) that currently consume `getPublicUrl` output via
+  `cashbook_attachment.file_url` — switch to signed-URL retrieval.
+- `src/review/OverseerReview.tsx` — `decide()` / `handleSubmitToHO()` enum mapping +
+  move to transition RPC (blocked on OD-4).
+- Audit callers (`logAuditAction` / `logSelfReviewException`) — move writes inside the
+  transition RPCs or keep client insert only with `user_id = auth.uid()` binding.
+- DB objects (draft only, see `tranche3-migration-draft.sql`): storage.objects policies
+  on `cashbook-proofs`; `cashbook-proofs.public=false`; period/line-item/attachment
+  lock predicate or trigger; transition RPCs; `get_or_create_period` p_user_id guard;
+  `audit_log` policies; grant revokes.
+- No change to `permissions.ts` matrix semantics, crypto, or the offline PIN flow.
+
+---
+
+## 5. Role / action / state test matrix (includes denied cases)
+
+Legend: ALLOW = operation must succeed; DENY = must be rejected server-side.
+
+### 5.1 Proof upload / read
+
+| Actor role | Congregation in hierarchy? | Period status | Op | Expected |
+|---|---|---|---|---|
+| Treasurer | yes | Draft | upload proof | ALLOW |
+| Treasurer | yes | AuditApproved (locked) | upload proof | DENY (locked parent) |
+| Treasurer | no | Draft | upload proof | DENY (out of scope) |
+| any auth | yes | Draft | read own-congregation proof | ALLOW (signed URL) |
+| any auth | no | any | read proof | DENY |
+| anon / public | n/a | any | read proof via URL | DENY (bucket private) |
+| Treasurer | yes | Draft | insert attachment w/ mismatched congregation_id | DENY (parent-derived) |
+| Treasurer | yes | Draft | insert attachment w/ uploaded_by != self | DENY/override to auth.uid() |
+
+### 5.2 Period / line-item writes
+
+| Actor role | In hierarchy? | Status | Op | Expected |
+|---|---|---|---|---|
+| Treasurer | yes | Draft | edit line item | ALLOW |
+| Treasurer | yes | AuditApproved | edit line item | DENY (locked) |
+| Treasurer | yes | SubmittedToOverseer | update period status directly | DENY (RPC only) |
+| in-hierarchy user | yes | any | DELETE period directly | DENY (RPC only) |
+| in-hierarchy user | yes | any | TRUNCATE cashbook_period | DENY (grant revoked) |
+| Treasurer | yes | Draft | call get_or_create_period w/ p_user_id != self | DENY (auth.uid bind) |
+| out-of-hierarchy | no | any | call get_or_create_period | DENY (42501) |
+
+### 5.3 Approval / submission transitions (via RPC)
+
+| Actor role | Pre-status | Action | Expected |
+|---|---|---|---|
+| Auditor | Submitted | audit_approve | ALLOW -> AuditApproved + AUDIT_APPROVE (atomic) |
+| Auditor | Submitted | audit_reject | ALLOW -> Rejected + reason preserved + AUDIT_REJECT |
+| Treasurer | Submitted | audit_approve | DENY (role lacks approve perm) |
+| Auditor | AuditApproved | audit_approve again | DENY (wrong pre-state) |
+| Chairperson/Elder | AuditApproved | submit_to_overseer | ALLOW -> SubmittedToOverseer |
+| Overseer | SubmittedToOverseer | overseer_review (approve) | ALLOW -> per OD-4 mapping + OVERSEER_APPROVE |
+| Overseer | SubmittedToOverseer | overseer_review (reject) | ALLOW -> per OD-4 mapping + reason + OVERSEER_REJECT |
+| Overseer | Draft | overseer_review | DENY (wrong pre-state) |
+| Overseer | (post-overseer) | submit_to_ho | ALLOW -> SubmittedToHO + MONTH_SUBMIT_TO_HO |
+| HO | SubmittedToHO | ho_review | ALLOW -> HOReviewed |
+| any | any | HO reject | N/A (workflow not established — not implemented) |
+
+### 5.4 Audit log
+
+| Actor | Op | Expected |
+|---|---|---|
+| any auth | INSERT audit row with user_id = self | ALLOW |
+| any auth | INSERT audit row with user_id = someone else | DENY (bound to auth.uid) |
+| any auth | SELECT audit rows outside hierarchy | DENY |
+| any auth | UPDATE / DELETE audit row | DENY (append-only) |
+
+---
+
+## 6. Unresolved decisions (narrow, need sign-off before implementation)
+
+- **OD-1 (proof storage):** store object **path** (mint signed URLs on read) vs keep a
+  `file_url` column. Recommend path + signed URLs. Affects attachment schema + display.
+- **OD-2 (lock enforcement):** RLS status predicate (Option A) vs RPC + trigger choke
+  point (Option B). Recommend Option B for atomicity.
+- **OD-3 (grants):** revoke only TRUNCATE+TRIGGER (minimum), or also move all writes to
+  RPC-only and revoke direct INSERT/UPDATE/DELETE. Recommend minimum now, RPC-only as
+  the target once transition RPCs exist.
+- **OD-4 (overseer enum mapping):** choose approve mapping (A1 fold-to-SubmittedToHO vs
+  A2 audit-only + separate submit) and reject mapping (R1 shared `Rejected` vs R2 return
+  to earlier stage). Blocks the `OverseerReview.tsx` fix. Product decision required.
+- **OD-5 (`can_capture_period`):** wire it into the capture guard to enforce week
+  sequencing, or formally retire it. Currently unenforced.
+
+---
+
+## 7. Deployment sequence and rollback (for when implementation is authorised)
+
+Nothing here is applied yet. When authorised:
+
+1. `supabase db pull` against `cwdyixafvylzgtpsfmwr` to capture the true deployed schema
+   as the migration baseline (repo migrations are NOT the deployed source of truth).
+2. Apply DB changes in dependency order on a branch / staging first:
+   a. Create transition RPCs + `get_or_create_period` guard (additive, safe).
+   b. Add lock trigger / predicate.
+   c. Tighten `audit_log` policies.
+   d. Revoke TRUNCATE/TRIGGER grants.
+   e. Flip `cashbook-proofs` to private + swap storage policies.
+3. Deploy app code that calls the new RPCs and signed-URL reads **together with / after**
+   the storage flip (the public-read removal is breaking for any code still using
+   `getPublicUrl`, so app + bucket change must ship in lockstep).
+4. Verify with the §5 matrix (especially the DENY rows) before promoting.
+
+Rollback: each DB change is a discrete migration; roll back in reverse order. The
+storage-privacy flip is the only user-visible breaking step — its rollback is
+re-enabling public read, which should only be a temporary emergency measure. Keep the
+old client build artifact available so app + bucket can be reverted together.
+
+---
+
+## 8. Confirmation of non-action
+
+No application code, configuration, database object, storage bucket, migration, or Edge
+Function was created, modified, run, or deployed for this package. The only files written
+are this document and `tranche3-migration-draft.sql` (marked NOT APPLIED), both inside
+`.kiro/specs/cashbook-reliability-hardening/`.

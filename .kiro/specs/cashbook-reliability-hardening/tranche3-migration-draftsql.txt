@@ -1,0 +1,140 @@
+﻿-- =============================================================================
+-- Tranche 3 DRAFT MIGRATION  --  NOT APPLIED  --  DO NOT RUN AS-IS
+-- =============================================================================
+-- Project (deployed, authoritative): cwdyixafvylzgtpsfmwr ("jw-cashbook-v4")
+-- This file is a PROPOSAL artefact only. It has NOT been executed against any
+-- database. Before turning any of this into a real migration, run
+--   supabase db pull
+-- so the local baseline matches the DEPLOYED schema (repo migrations do not).
+--
+-- Several statements are blocked on open decisions (see tranche3-remediation.md
+-- sections 6: OD-1..OD-5). Those are left as commented TODO stubs, not guesses.
+-- =============================================================================
+
+BEGIN;  -- (illustrative; split into discrete migrations per section 7)
+
+-- -----------------------------------------------------------------------------
+-- A. get_or_create_period: bind p_user_id to auth.uid() for non-service_role.
+--    Keep the existing hierarchy 42501 check. (Area 2c)
+-- -----------------------------------------------------------------------------
+-- DRAFT: re-create the function with an added guard. Exact body must be taken
+-- from `supabase db pull` output, not retyped from memory. Guard to insert:
+--
+--   if auth.role() <> 'service_role'
+--      and p_user_id is distinct from auth.uid() then
+--     raise exception 'p_user_id must equal auth.uid()' using errcode = '42501';
+--   end if;
+--
+-- (No role/lock change in this step; it only fixes actor spoofing.)
+
+-- -----------------------------------------------------------------------------
+-- B. Revoke dangerous grants from authenticated. (Area 2e) -- SAFE / recommended now
+-- -----------------------------------------------------------------------------
+REVOKE TRUNCATE, TRIGGER ON TABLE public.cashbook_period     FROM authenticated;
+REVOKE TRUNCATE, TRIGGER ON TABLE public.cashbook_line_item  FROM authenticated;
+REVOKE TRUNCATE, TRIGGER ON TABLE public.cashbook_attachment FROM authenticated;
+REVOKE TRUNCATE, TRIGGER ON TABLE public.audit_log           FROM authenticated;
+-- (fifth cashbook table from inventory - confirm exact name via db pull before running)
+-- REVOKE TRUNCATE, TRIGGER ON TABLE public.<fifth_cashbook_table> FROM authenticated;
+-- OD-3: optionally also revoke direct INSERT/UPDATE/DELETE once transition RPCs exist.
+
+-- -----------------------------------------------------------------------------
+-- C. audit_log: forgeable/readable fix. (Area 2d) -- P2 critical
+-- -----------------------------------------------------------------------------
+-- Replace permissive policies. Keep append-only (no UPDATE/DELETE policy).
+DROP POLICY IF EXISTS "<existing_audit_insert_policy>" ON public.audit_log;
+DROP POLICY IF EXISTS "<existing_audit_select_policy>" ON public.audit_log;
+
+CREATE POLICY audit_log_insert_self ON public.audit_log
+  FOR INSERT TO authenticated
+  WITH CHECK ( user_id = auth.uid() );   -- confirm actor column name via db pull
+
+CREATE POLICY audit_log_select_scoped ON public.audit_log
+  FOR SELECT TO authenticated
+  USING ( congregation_id IN (SELECT get_my_hierarchy_ids()) );  -- confirm scope column
+
+-- -----------------------------------------------------------------------------
+-- D. Status-aware write lock on periods + children. (Area 2a) -- P3 critical
+--    OD-2: Option B (RPC + trigger choke point) recommended. Trigger sketch:
+-- -----------------------------------------------------------------------------
+-- A period is "locked" when status in
+--   ('Submitted','AuditApproved','SubmittedToOverseer','SubmittedToHO','HOReviewed').
+-- Direct client UPDATE/DELETE on a locked period (or its line items/attachments)
+-- is rejected unless the session is inside an approved transition RPC that sets a
+-- transaction-local guard, e.g.  perform set_config('app.in_transition','1',true);
+--
+-- CREATE OR REPLACE FUNCTION public.reject_locked_period_write() ...
+--   IF current_setting('app.in_transition', true) IS DISTINCT FROM '1'
+--      AND <row's period status is locked> THEN
+--     RAISE EXCEPTION 'period is locked' USING errcode = '42501';
+--   END IF;
+-- CREATE TRIGGER ... BEFORE UPDATE OR DELETE ON cashbook_period / _line_item / _attachment.
+-- (Full bodies deferred until OD-2 is confirmed; do not apply a half version.)
+
+-- -----------------------------------------------------------------------------
+-- E. Atomic transition RPCs (status + audit together, actor = auth.uid()). (Area 2b)
+--    Each re-checks the SPECIFIC permission (not mere hierarchy membership),
+--    checks the expected pre-state, writes status + audit in one tx, and sets the
+--    app.in_transition guard so the lock trigger (D) permits the state change.
+-- -----------------------------------------------------------------------------
+-- DRAFT signatures only (bodies deferred until OD-2/OD-4 confirmed):
+--   audit_approve_period(p_period_id uuid)         -- Submitted -> AuditApproved
+--   audit_reject_period(p_period_id uuid, p_reason text)  -- -> Rejected, reason kept
+--   submit_period_to_overseer(p_period_id uuid)    -- AuditApproved -> SubmittedToOverseer
+--   overseer_review_period(p_period_id uuid, p_approve bool, p_reason text) -- OD-4 mapping
+--   submit_period_to_ho(p_period_id uuid)          -- (post-overseer) -> SubmittedToHO
+--   ho_review_period(p_period_id uuid)             -- SubmittedToHO -> HOReviewed
+-- NOTE: NO OverseerApproved/OverseerRejected enum values are added; NO HO-rejection
+--       workflow is created; enum sort order is NOT used as workflow rank.
+
+-- -----------------------------------------------------------------------------
+-- F. Proof bucket privacy + scoped storage policies. (Area 1) -- P1 critical
+--    BREAKING for any client still using getPublicUrl -> ship with app change.
+-- -----------------------------------------------------------------------------
+UPDATE storage.buckets SET public = FALSE WHERE id = 'cashbook-proofs';
+
+DROP POLICY IF EXISTS "Allow public reads"          ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
+
+CREATE POLICY cashbook_proofs_insert_scoped ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'cashbook-proofs'
+    AND (storage.foldername(name))[1]::uuid IN (SELECT get_my_hierarchy_ids())
+  );
+
+CREATE POLICY cashbook_proofs_select_scoped ON storage.objects
+  FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'cashbook-proofs'
+    AND (storage.foldername(name))[1]::uuid IN (SELECT get_my_hierarchy_ids())
+  );
+
+CREATE POLICY cashbook_proofs_modify_scoped ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (
+    bucket_id = 'cashbook-proofs'
+    AND (storage.foldername(name))[1]::uuid IN (SELECT get_my_hierarchy_ids())
+  );
+
+CREATE POLICY cashbook_proofs_delete_scoped ON storage.objects
+  FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'cashbook-proofs'
+    AND (storage.foldername(name))[1]::uuid IN (SELECT get_my_hierarchy_ids())
+  );
+
+-- -----------------------------------------------------------------------------
+-- G. Attachment parent-linkage enforcement. (Area 1.3)
+--    Route attachment inserts through an RPC/trigger that sets uploaded_by =
+--    auth.uid(), derives congregation_id from line_item -> period, requires that
+--    congregation in get_my_hierarchy_ids(), and requires the parent period
+--    editable. Body deferred until OD-1/OD-2 confirmed.
+-- -----------------------------------------------------------------------------
+-- (stub)
+
+ROLLBACK;  -- <<< DRAFT guard: this file ends in ROLLBACK so an accidental run is a no-op.
+-- When promoted to real migrations, split per section 7 and remove this ROLLBACK.
+-- =============================================================================
+-- END DRAFT  --  NOT APPLIED
+-- =============================================================================
