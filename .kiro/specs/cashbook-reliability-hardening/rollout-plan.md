@@ -8,7 +8,106 @@
 
 ---
 
-## 1. Housekeeping state (done, in place)
+## 0. RELEASE CANDIDATE — coordinated pre-production merge to `main` (for review; NOT executed)
+
+### Candidate
+- **Candidate SHA = `8a7ccd5d`** (`feat(landing): add Beyond weekly audit strip`).
+- Local `feat/treasurer-dashboard-v1` == `origin/feat/treasurer-dashboard-v1` == `8a7ccd5d`
+  (0 ahead / 0 behind the remote feature branch — already pushed).
+- **27 commits ahead of `origin/main` (`d34a3f51`), 0 behind** — merge to `main` is a clean
+  fast-forward (merge-base == `origin/main` tip). Nothing was added after `8a7ccd5d`.
+- **SHA to test = `8a7ccd5d`.**
+
+### Exact diff against `origin/main`
+- **89 files changed, +14,142 / −276.** App source (sync engine, capture/review, landing,
+  role guides, storage predicates, auth/identity) + tests + the SQL set below.
+- **SQL files in the diff (3 migrations + 2 test suites):**
+  - `supabase/migrations/20261102210349_officers_interim_fields.sql` — **ALREADY APPLIED** to the
+    shared backend (file lands in `main` for history; do NOT re-apply; its `schema_migrations`
+    row exists so `supabase db push` skips it).
+  - `supabase/migrations/20261012010000_tranche4_proof_access.sql` — **UNAPPLIED** (see renumber note §4).
+  - `supabase/migrations/20261105120000_two_person_signoff.sql` — **UNAPPLIED**.
+  - `supabase/tests/tranche4_proof_rls.test.sql`, `supabase/tests/two_person_signoff_rls.test.sql`.
+
+### Preview sign-in verification (candidate `8a7ccd5d`)
+- The branch-alias Preview resolves to the feature tip (`8a7ccd5d`), but it is behind **Vercel SSO**
+  (`/login` 302 → `vercel.com/sso-api`). The agent has no Vercel session, so the check is
+  **UNVERIFIED by the agent**.
+- A Preview for the exact SHA **does exist** (branch tip is `8a7ccd5d`), so no new Preview is needed.
+- **One check for an authorised teammate (no Cashbook credentials, no DevTools):** open the
+  `8a7ccd5d` Preview, click **Sign in**, and confirm the **Cashbook sign-in form** (Email address +
+  Password) appears at `/login` — not the Vercel access screen, and not the landing page remaining.
+  Report pass / fail. (Clicking is the test; do not enter credentials.)
+- Code-level note (already established, not re-diagnosed here): a local prod build of `8a7ccd5d` in a
+  fresh browser navigates `/` → `/login` correctly; the historical "landing stays" symptom was a
+  stale PWA service worker, not this source.
+
+### Exact app + migration ORDER with approval pause (coordinated run)
+> App deploy (Vercel, triggered by the merge to `main`) and DB migration (manual / `supabase db push`
+> against the shared pre-prod backend) are INDEPENDENT actions — Vercel runs only `vite build`, never
+> migrations — so they must be sequenced deliberately. Full per-check detail is in §4–§8.
+
+1. **Announce an APPROVAL PAUSE** and confirm no reviewer is mid-approval. The pause MUST span from
+   the first migration apply until the new app is live, because: the new app approves **RPC-only**
+   (direct `status` writes are blocked by the sign-off trigger), and the current/old app approves by
+   direct status update. During the window, neither old nor new approval path is both-present —
+   so approvals are intentionally held. Captures stay **pending**; no one-signature closure.
+2. **Refresh the pre-cutover backup snapshot** immediately before the first apply (archive was
+   created + contents-checked 2026-11-04; **restore rehearsal still NOT run / no disposable target —
+   open dependency**, §3).
+3. **Apply the sign-off migration FIRST:** `20261105120000_two_person_signoff.sql`. Then run the
+   authenticated sign-off acceptance checks in §6 (bypass closure on the OLD endpoint + direct
+   update; **INSERT/UPSERT cannot mint an approved row**; second sign-off + `AuditApproved` commit
+   **or roll back together** via a controlled pre-commit failure + read-back; no self-approval /
+   no same-person-twice / involvement incl. acting-as-Treasurer; fresh-revision; Elder referral
+   leaves it pending).
+4. **Apply Tranche 4 SECOND:** `20261012010000_tranche4_proof_access.sql`. **Renumber required**
+   before `supabase db push`: its version `20261012010000` predates both the last-applied
+   `20261102210349` AND the sign-off `20261105120000`, so it sorts out of order — give it a version
+   **after `20261105120000`** (proposed `20261105130000_tranche4_proof_access.sql`, documented here,
+   **file NOT renamed this pass**). Pre-check the proof object-key layout matches the policy parser
+   (`folder[1]::uuid` = congregation, `folder[5]` = uploader). Then run the Tranche 4 checks in §6
+   (same-proof positive+negative control; direct Storage `UPDATE` overwrite denied; broad `l4t6gw_2`
+   gone; legacy cross-bucket write leak closed; scoped SELECT/INSERT/DELETE; Secretary denied).
+5. **Merge app to `main`** (fast-forward `main` → `8a7ccd5d`); Vercel builds Production.
+   **Confirm the Production environment's Supabase variables point at the backend just migrated**
+   (the Preview/Production Supabase env is still unconfirmed — §2). Keep
+   `PROGRESSIVE_DISPATCH_ENABLED=false` (automatic transfer stays off until reconnect re-validation
+   + shared-device actor isolation are verified live).
+6. **Verify Sign in opens the form on the Production URL**, then **lift the approval pause**.
+
+### Stop criteria (abort the run; go to containment §8)
+Any of §7 holds, in particular: a direct status update / INSERT / UPSERT / old endpoint reaches
+`AuditApproved`; the second sign-off and the transition diverge in the read-back; after Tranche 4 a
+cross-congregation user reads/writes a foreign proof, an overwrite succeeds, or the cross-bucket
+write still authorises; authorised capture/proof read breaks for the owning congregation; any check
+only passes with the service-role key. Fallback is **containment, not proven recovery** (§8).
+
+### Blockers / open items (must clear before merge)
+- **B1 — Production Supabase target UNCONFIRMED** (§2): which Supabase project the Vercel Production
+  (and Preview) env points at is not verified. Confirm before step 5.
+- **B2 — Preview sign-in UNVERIFIED** (above): needs the one authorised-teammate click check.
+- **B3 — Tranche 4 migration renumber** not yet done (documented only); must reorder before apply.
+- **B4 — No restore rehearsal / no disposable target** (§3): recovery is unproven; refreshed archive
+  is contents-verified only.
+- **B5 — Untracked durable spec notes** (see below) would NOT travel into `main` unless committed.
+- **B6 — User-access provisioning** (Elder→Overseer→DHO) still a pilot dependency (§5); synthetic
+  test accounts for the acceptance checks are not yet provisioned.
+
+### Durable hardening notes still worth committing (identified — NOT committed this pass)
+Untracked in `.kiro/specs/cashbook-reliability-hardening/`, durable, recommended to commit so they
+reach `main`: `requirements.md`, `design.md`, `tasks.md`, `next-stage-direction.md`,
+`tranche2-inspection.md`, `tranche3-migration-draftsql.txt`, `tranche3-remediationmd.txt`,
+`tranche4-implementation.md`, `tranche4-proof-access-proposal.md`,
+`tranche4-proof-access-proposal-rev2.md`, `tranche4b-implementation.md`, `tranche4c-implementation.md`.
+NOT recommended: `CashbookForm.tsx` (a stray duplicate of the app component — scratch) and
+`.config.kiro` (local tooling state). Already committed: `gap-analysis.md`,
+`two-person-signoff-design.md`, `FINAL-REPORT-hardening-pass.md`, `tranche4-migration-diff.sql`,
+`tranche4-access-checks.md`, `rollout-plan.md`.
+
+---
+
+## 1. Housekeeping state (earlier snapshot — superseded by §0)
 
 - Branch `feat/treasurer-dashboard-v1`, **HEAD = `e2466299`** ("docs(hardening): commit durable
   design/rollout notes + ignore scratch evidence").
