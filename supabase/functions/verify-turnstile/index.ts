@@ -5,11 +5,14 @@
 //   - No token                    -> 400
 //   - Cloudflare verify failure   -> 403
 //   - Secret unset (dev)          -> success (fail-open in dev, fail-closed in prod)
-//   - Sends remoteip from the forwarding header
+//   - Sends remoteip (first client IP from x-forwarded-for; omitted when not valid)
+//   - Surfaces Cloudflare's error-codes on failure (never the secret)
 // The TURNSTILE_SECRET_KEY lives only in the Edge Function runtime, never the client.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // deno-lint-ignore-file no-explicit-any
+import { firstClientIp } from "./ip.ts";
+
 declare const Deno: { env: { get(k: string): string | undefined }; serve: (h: (r: Request) => Response | Promise<Response>) => void };
 
 const CORS = {
@@ -41,8 +44,11 @@ Deno.serve(async (req: Request) => {
       return json({ success: false, error: "No token provided" }, 400);
     }
 
-    const remoteip = req.headers.get("x-forwarded-for") ?? "";
-    const form = new URLSearchParams({ secret: secretKey, response: token, remoteip });
+    const form = new URLSearchParams({ secret: secretKey, response: token });
+    // x-forwarded-for may be "client, proxy1, proxy2"; send only the first client IP,
+    // and omit remoteip entirely when it is absent or not a valid IP (it is optional).
+    const clientIp = firstClientIp(req.headers.get("x-forwarded-for"));
+    if (clientIp) form.set("remoteip", clientIp);
 
     const resp = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
@@ -52,7 +58,11 @@ Deno.serve(async (req: Request) => {
     const result: any = await resp.json();
 
     if (!result.success) {
-      return json({ success: false, error: "Verification failed" }, 403);
+      // Surface Cloudflare's error-codes so the failure is diagnosable. These codes
+      // describe the token/validation problem and never contain the secret.
+      const errorCodes: string[] = Array.isArray(result["error-codes"]) ? result["error-codes"] : [];
+      console.error("Turnstile verification failed", { errorCodes });
+      return json({ success: false, error: "Verification failed", errorCodes }, 403);
     }
     return json({ success: true });
   } catch {
