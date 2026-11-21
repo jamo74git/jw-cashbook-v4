@@ -19,6 +19,7 @@ import {
   verifyHmac,
   verifyPin,
 } from "@/services/crypto";
+import { turnstileFailureMessage } from "@/lib/auth/turnstile";
 import type { Role } from "@/lib/types";
 
 // ─── Tunable security parameters ─────────────────────────────────────────────
@@ -134,7 +135,7 @@ export async function activateOffline(input: {
       body: { token: input.turnstileToken },
     });
     if (error || !data?.success) {
-      return { ok: false, reason: "turnstile", message: "Security verification failed." };
+      return { ok: false, reason: "turnstile", message: await turnstileFailureMessage(data, error) };
     }
   }
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Turnstile } from "@/components/Turnstile";
+import { turnstileFailureMessage } from "@/lib/auth/turnstile";
 import type { Role, HierarchyLevel } from "@/lib/types";
 
 export interface AuthenticatedContext {
@@ -60,7 +61,7 @@ export function LoginForm({ onAuthenticated }: LoginFormProps) {
       });
       if (verifyErr || !data?.success) {
         setLoading(false);
-        setError("Security verification failed. Please try again.");
+        setError(await turnstileFailureMessage(data, verifyErr));
         return;
       }
     }
