@@ -11,6 +11,7 @@ import type { UserHierarchyAccess } from "@/lib/types";
 import { startProgressiveDispatch } from "@/utils/syncBootstrap";
 import { ReloadPrompt } from "./pwa/ReloadPrompt";
 import { RoleGuideHost } from "@/components/RoleGuideHost";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { LandingPage } from "@/features/landing/LandingPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { CapturePage } from "@/capture/CapturePage";
@@ -105,6 +106,7 @@ export function App() {
 
   return (
     <BrowserRouter>
+      <AppErrorBoundary>
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/" element={<LandingPage />} />
@@ -183,6 +185,7 @@ export function App() {
       {/* Dismissible post-sign-in role guide (non-compulsory; reachable via Help). */}
       <RoleGuideHost />
       <ReloadPrompt />
+      </AppErrorBoundary>
     </BrowserRouter>
   );
 }
