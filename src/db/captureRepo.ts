@@ -355,7 +355,8 @@ export async function addLineItem(
 
   if (section === "Burial") {
     item_type = "Burial";
-    transaction_date = TODAY(); // governance: forced today
+    // Honour the captured transaction date (consistent with Expenses); default to today when none.
+    transaction_date = input.transaction_date ?? TODAY();
   } else if (section === "Expenses") {
     item_type = "Expense";
     transaction_date = input.transaction_date ?? TODAY();
@@ -365,9 +366,12 @@ export async function addLineItem(
       item_type === "EFT" || item_type === "DirectDebit" ? input.transaction_date ?? null : TODAY();
   }
 
-  // Task 1: EFT/DD transaction date may not be in the future (device-local date). Earlier dates
-  // (incl. capturing an earlier week today) are allowed. Cash/deposit-slip dates are unaffected.
-  if ((item_type === "EFT" || item_type === "DirectDebit") && isFutureDate(transaction_date)) {
+  // Task 1: a non-cash transaction date (EFT/DD/Burial/Expense) may not be in the future
+  // (device-local date). Earlier dates (incl. capturing an earlier week today) are allowed.
+  // Cash/deposit-slip dates are unaffected.
+  const isNonCashDated =
+    item_type === "EFT" || item_type === "DirectDebit" || item_type === "Burial" || item_type === "Expense";
+  if (isNonCashDated && isFutureDate(transaction_date)) {
     throw new Error("Transaction date cannot be in the future.");
   }
 
@@ -399,11 +403,12 @@ export async function addLineItem(
 }
 
 export async function updateLineItem(localId: string, changes: Partial<LocalLineItem>): Promise<void> {
-  // Task 1: reject a future EFT/DD transaction date at the data layer (backs up the UI check).
+  // Task 1: reject a future non-cash transaction date at the data layer (backs up the UI check).
   if (changes.transaction_date !== undefined) {
     const existing = await db.lineItems.get(localId);
     const t = (changes.item_type ?? existing?.item_type) as string | undefined;
-    if ((t === "EFT" || t === "DirectDebit") && isFutureDate(changes.transaction_date)) {
+    const isNonCashDated = t === "EFT" || t === "DirectDebit" || t === "Burial" || t === "Expense";
+    if (isNonCashDated && isFutureDate(changes.transaction_date)) {
       throw new Error("Transaction date cannot be in the future.");
     }
   }

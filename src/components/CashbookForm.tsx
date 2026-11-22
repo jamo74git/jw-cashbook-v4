@@ -42,6 +42,14 @@ const money = (n: number) => `R${n.toFixed(2)}`;
 const needsProof = (i: LocalLineItem) => ["EFT", "DirectDebit", "Burial", "Expense"].includes(i.item_type);
 const hasProofLocally = (i: LocalLineItem) => i.proof_status === "Deposited" || i.proof_status === "Pending" || !!i.proofBlob;
 
+// Date inputs render a NATIVE control whose text and calendar icon follow `color-scheme`.
+// Pin it to the active theme in BOTH modes (not dark-only) so the typed date and the picker
+// icon stay legible in light AND dark mode. Applied to every date input in this form.
+const DATE_INPUT_CLASS = "[color-scheme:light] dark:[color-scheme:dark]";
+// Non-cash line types that carry a user transaction_date and must never be future-dated.
+const DATED_TYPES = ["EFT", "DirectDebit", "Burial", "Expense"];
+const isDatedType = (t: string) => DATED_TYPES.includes(t);
+
 // Task 6: readable, theme-aware payment-type badge (label + colour; never colour alone).
 function paymentBadge(t: string): { label: string; cls: string } {
   switch (t) {
@@ -240,7 +248,7 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
     if (!editTarget || !canEdit) return null;
     const amt = parseFloat(editAmount);
     if (!amt || amt <= 0) { setEditError("Amount must be > 0"); return null; }
-    const isNonCash = editTarget.item_type === "EFT" || editTarget.item_type === "DirectDebit";
+    const isNonCash = isDatedType(editTarget.item_type);
     if (isNonCash && !editDate) { setEditError("Transaction date is required"); return null; }
     if (isNonCash && isFutureDate(editDate)) { setEditError("Transaction date cannot be in the future."); return null; }
     return { localId: editTarget.localId, changes: isNonCash ? { amount: amt, transaction_date: editDate } : { amount: amt } };
@@ -300,6 +308,9 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
     if (activeTab === "Burial" && !ref.trim()) return setError("Receipt number is required");
     if (activeTab === "Expenses" && !ref.trim()) return setError("Description is required");
     if ((activeTab === "Burial" || activeTab === "Expenses") && (!amt || amt <= 0)) return setError("Amount must be > 0");
+    // Task 1: a Burial/Expense transaction date (when supplied) may not be beyond the local capture
+    // date. The date is optional here, so an empty value is left to default server-/repo-side.
+    if ((activeTab === "Burial" || activeTab === "Expenses") && isFutureDate(txnDate)) return setError("Transaction date cannot be in the future.");
 
     const localId = await capture.addLineItem(period.localId, activeTab as Exclude<TabKey, "Banking">, {
       officer_id: officerId || null,
@@ -554,10 +565,10 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
                 <Label className="text-xs">Amount (R)</Label>
                 <Input type="number" step="0.01" className="h-8 text-xs text-right" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} />
               </div>
-              {(editTarget.item_type === "EFT" || editTarget.item_type === "DirectDebit") && (
+              {isDatedType(editTarget.item_type) && (
                 <div className="space-y-1">
                   <Label className="text-xs">Transaction Date *</Label>
-                  <Input type="date" className="h-8 text-xs dark:[color-scheme:dark]" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                  <Input type="date" className={`h-8 text-xs ${DATE_INPUT_CLASS}`} value={editDate} onChange={(e) => setEditDate(e.target.value)} />
                 </div>
               )}
               {(editTarget.proofBlob || editTarget.proof_status === "Deposited") && (
@@ -673,12 +684,15 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
                 </select>
               )}
               {activeTab === "Burial" && (
-                <Input className="h-9 text-xs w-40" placeholder="Receipt # *" value={ref} onChange={(e) => setRef(e.target.value)} />
+                <>
+                  <Input className="h-9 text-xs w-40" placeholder="Receipt # *" value={ref} onChange={(e) => setRef(e.target.value)} />
+                  <Input type="date" className={`h-9 text-xs w-36 ${DATE_INPUT_CLASS}`} value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
+                </>
               )}
               {activeTab === "Expenses" && (
                 <>
                   <Input className="h-9 text-xs flex-1 min-w-[140px]" placeholder="Description *" value={ref} onChange={(e) => setRef(e.target.value)} />
-                  <Input type="date" className="h-9 text-xs w-36 dark:[color-scheme:dark]" value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
+                  <Input type="date" className={`h-9 text-xs w-36 ${DATE_INPUT_CLASS}`} value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
                 </>
               )}
               <Input
@@ -697,7 +711,7 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
               <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground">Transaction Date *</Label>
-                  <Input type="date" className="h-8 text-xs dark:[color-scheme:dark]" value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
+                  <Input type="date" className={`h-8 text-xs ${DATE_INPUT_CLASS}`} value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground">Bank Ref</Label>

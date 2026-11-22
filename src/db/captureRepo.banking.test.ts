@@ -120,6 +120,35 @@ describe("Task 1 - future transaction-date guard (repo backstop)", () => {
     const id = await addLineItem(p.localId, "Members", { officer_id: "A", type: "EFT", amount: 100, transaction_date: "2000-01-01" });
     await expect(updateLineItem(id, { transaction_date: "2999-01-01" })).rejects.toThrow(/future/i);
   });
+
+  it("rejects a future Expense transaction date in addLineItem", async () => {
+    const p = await newPeriod();
+    await expect(
+      addLineItem(p.localId, "Expenses", { amount: 100, description: "Future expense", transaction_date: "2999-01-01" })
+    ).rejects.toThrow(/future/i);
+  });
+
+  it("rejects a future Burial transaction date in addLineItem", async () => {
+    const p = await newPeriod();
+    await expect(
+      addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2999-01-01" })
+    ).rejects.toThrow(/future/i);
+  });
+
+  it("honours a past Burial transaction date (consistent with Expenses) instead of forcing today", async () => {
+    const p = await newPeriod();
+    const id = await addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2020-01-05" });
+    const item = await db.lineItems.get(id);
+    expect(item?.transaction_date).toBe("2020-01-05");
+  });
+
+  it("rejects a future transaction date when editing a Burial/Expense entry via updateLineItem", async () => {
+    const p = await newPeriod();
+    const burialId = await addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2020-01-05" });
+    await expect(updateLineItem(burialId, { transaction_date: "2999-01-01" })).rejects.toThrow(/future/i);
+    const expenseId = await addLineItem(p.localId, "Expenses", { amount: 100, description: "E", transaction_date: "2020-01-05" });
+    await expect(updateLineItem(expenseId, { transaction_date: "2999-01-01" })).rejects.toThrow(/future/i);
+  });
 });
 
 describe("Task 2 - editing after proof uploaded preserves historical proof metadata", () => {
