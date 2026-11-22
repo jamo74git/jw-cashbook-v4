@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeRequiredManifest,
   outstandingProofs,
+  buildSubmitManifestPayload,
   resolveSignOff,
   computeReviewReadiness,
   proofRequiredFor,
@@ -48,6 +49,38 @@ describe("computeRequiredManifest (frozen proof list belonging to a revision)", 
     const m = computeRequiredManifest([], { revision: 1, frozenAt: "t" });
     expect(m.proofs).toEqual([]);
     expect(m.balanced).toBe(true);
+  });
+});
+
+describe("buildSubmitManifestPayload (submit RPC payload shaping)", () => {
+  it("fail-closed when the manifest is absent (unbalanced => not Review_Ready)", () => {
+    expect(buildSubmitManifestPayload(null)).toEqual({ balanced: false, outstandingProofCount: 0, proofs: [] });
+    expect(buildSubmitManifestPayload(undefined)).toEqual({ balanced: false, outstandingProofCount: 0, proofs: [] });
+  });
+
+  it("carries a balanced manifest with zero outstanding proofs through unchanged", () => {
+    const m = computeRequiredManifest(
+      [line({ item_type: "EFT", amount: 100, proofObjectKey: "k" })],
+      { revision: 2, frozenAt: "t" }
+    );
+    const payload = buildSubmitManifestPayload(m);
+    expect(payload.balanced).toBe(true);
+    expect(payload.outstandingProofCount).toBe(0);
+    expect(payload.proofs).toBe(m.proofs);
+  });
+
+  it("counts declared-outstanding proofs (a locked-but-not-ready submission)", () => {
+    const m = computeRequiredManifest(
+      [
+        line({ localId: "cash", item_type: "Cash", amount: 100 }),
+        line({ localId: "eft", item_type: "EFT", amount: 50 }), // required, no proof -> outstanding
+        line({ localId: "burial", section: "Burial", item_type: "Burial", amount: 20 }), // outstanding
+      ],
+      { revision: 1, frozenAt: "t" }
+    );
+    const payload = buildSubmitManifestPayload(m);
+    expect(payload.outstandingProofCount).toBe(2);
+    expect(payload.balanced).toBe(false);
   });
 });
 

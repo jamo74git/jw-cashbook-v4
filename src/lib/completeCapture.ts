@@ -114,6 +114,33 @@ export function outstandingProofs(manifest: RequiredManifest): ManifestProofEntr
   return manifest.proofs.filter((p) => p.status === "declared-outstanding");
 }
 
+// ─── Submit RPC payload (cashbook_submit_period / cashbook_submission_manifest) ──
+export interface SubmitManifestPayload {
+  balanced: boolean;
+  outstandingProofCount: number;
+  proofs: ManifestProofEntry[];
+}
+
+/**
+ * Shape the server submit-RPC payload from the frozen Required_Manifest. Fail-closed:
+ * an absent manifest yields `{ balanced:false, outstandingProofCount:0, proofs:[] }` so
+ * an unbalanced submission can never be mistaken for Review_Ready server-side. When the
+ * manifest is present its own balance verdict + declared-outstanding count are carried
+ * through unchanged (the balance math stays the single source in captureTotals).
+ */
+export function buildSubmitManifestPayload(
+  manifest: RequiredManifest | null | undefined
+): SubmitManifestPayload {
+  if (!manifest) {
+    return { balanced: false, outstandingProofCount: 0, proofs: [] };
+  }
+  return {
+    balanced: manifest.balanced,
+    outstandingProofCount: outstandingProofs(manifest).length,
+    proofs: manifest.proofs,
+  };
+}
+
 // ─── Sign-off resolution (Treasurer default; everyone else = recorded exception) ──
 export type SignOffReason = "default" | "exception" | "ineligible";
 

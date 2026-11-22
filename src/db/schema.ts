@@ -240,6 +240,9 @@ export interface LocalPeriod {
   signOffReason?: string | null;
   // The frozen proof LIST belonging to this revision (Required_Manifest, §2.2.1).
   requiredManifest?: RequiredManifest | null;
+  // Stable op-ledger id for the cashbook_submit_period RPC, reused across submit-RPC
+  // retries so a lost ack never double-applies; a re-submission mints a fresh one.
+  submitOpId?: string | null;
 }
 
 // ─── Local line item (mirrors cashbook_line_item + offline proof) ────────────

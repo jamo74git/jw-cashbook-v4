@@ -177,6 +177,8 @@ export async function submitPeriod(
     signOffIsException: comments?.signOff?.isException ?? null,
     signOffReason: comments?.signOff?.reason ?? null,
     requiredManifest: manifest,
+    // Stable op-ledger id for the submit RPC; a fresh id per submitted revision.
+    submitOpId: uuid(),
     updatedAt: ts,
     localStatus: "pending",
   });
@@ -225,6 +227,8 @@ export async function confirmR0NoTithing(input: {
     signOffIsException: input.actingAsRole != null,
     signOffReason: input.actingAsRole != null ? "No-tithing confirmation (acting as Treasurer)" : null,
     requiredManifest: manifest,
+    // Stable op-ledger id for the submit RPC; a fresh id per submitted revision.
+    submitOpId: uuid(),
     localStatus: "pending",
     updatedAt: ts,
   });
