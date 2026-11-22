@@ -17,6 +17,9 @@ const mock = vi.hoisted(() => ({
   attachInsert: { data: [{ id: "att-1" }] as unknown, error: null as unknown },
   periodUpdate: { data: [{ id: "srv-p1" }] as unknown, error: null as unknown },
   auditInsert: { data: [{ id: "aud-1" }] as unknown, error: null as unknown },
+  // Banked-cash deposit model (design §4.3): slip row (returns its id) + coverage rows.
+  depositSlip: { data: { id: "slip-1" } as unknown, error: null as unknown },
+  depositSlipPeriod: { data: null as unknown, error: null as unknown },
   beforeStatusResolve: null as null | (() => Promise<void> | void),
 }));
 
@@ -25,6 +28,8 @@ function resultFor(table: string, op: string | null): unknown {
   if (table === "cashbook_attachment") return op === "insert" ? mock.attachInsert : mock.attachSelect;
   if (table === "cashbook_period") return mock.periodUpdate;
   if (table === "audit_log") return mock.auditInsert;
+  if (table === "cashbook_deposit_slip") return mock.depositSlip;
+  if (table === "cashbook_deposit_slip_period") return mock.depositSlipPeriod;
   return { data: null, error: null };
 }
 
@@ -105,6 +110,8 @@ beforeEach(async () => {
   mock.attachInsert = { data: [{ id: "att-1" }], error: null };
   mock.periodUpdate = { data: [{ id: "srv-p1" }], error: null };
   mock.auditInsert = { data: [{ id: "aud-1" }], error: null };
+  mock.depositSlip = { data: { id: "slip-1" }, error: null };
+  mock.depositSlipPeriod = { data: null, error: null };
   mock.beforeStatusResolve = null;
 });
 

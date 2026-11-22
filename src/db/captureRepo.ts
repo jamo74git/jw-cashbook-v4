@@ -12,6 +12,7 @@ import {
   type ItemType,
   type PeriodStatus,
 } from "@/db/schema";
+import type { DepositCoverage } from "@/lib/depositCombination";
 import type { Role, LineSection } from "@/lib/types";
 import type { MonthStatus } from "@/lib/phaseTypes";
 import { computeRequiredManifest } from "@/lib/completeCapture";
@@ -513,14 +514,46 @@ export function eligibleCashItems(items: LocalLineItem[]): LocalLineItem[] {
  */
 export async function markCashBanked(
   periodLocalId: string,
-  deposit: { blob: Blob; fileName: string; date?: string | null; bankRef?: string | null }
+  deposit: { blob: Blob; fileName: string; date?: string | null; bankRef?: string | null },
+  opts?: {
+    // "OwnService" (default) banks only THIS period's cash. "CombinedWeek" (chosen in the PM
+    // capture, design §4) also banks the SAME-week AM period's eligible cash under one slip,
+    // recording the cross-references so the AM period is covered without its own slip.
+    coverage?: DepositCoverage;
+  }
 ): Promise<number> {
   const depositHash = await sha256Hex(deposit.blob);
   const depositObjectKey = `${uuid()}-deposit-slip.${(deposit.fileName.split(".").pop() ?? "jpg").toLowerCase()}`;
+  const coverage: DepositCoverage = opts?.coverage ?? "OwnService";
   return db.transaction("rw", db.periods, db.lineItems, async () => {
+    const period = await db.periods.get(periodLocalId);
+    if (!period) return 0;
     const items = await getLineItems(periodLocalId);
     const cashItems = eligibleCashItems(items);
     if (cashItems.length === 0) return 0; // Task 8: no eligible cash -> do not create/replace deposit
+
+    // Combined (same-week) coverage is only valid captured on the PM service; it binds the
+    // AM period of the SAME congregation-week (mirrors the §2 server safeguard). If no such
+    // AM period has eligible cash, fall back to covering this period's own cash.
+    let amPeriod: LocalPeriod | undefined;
+    let amBanked = 0;
+    if (coverage === "CombinedWeek" && period.service === "PM") {
+      const amKey = `${period.congregationId}|${period.weekKey}|AM`;
+      const foundAm = await db.periods.where("naturalKey").equals(amKey).first();
+      const amCash = foundAm && isPeriodEditable(foundAm)
+        ? eligibleCashItems(await getLineItems(foundAm.localId))
+        : [];
+      if (foundAm && amCash.length > 0) {
+        for (const ci of amCash) {
+          await db.lineItems.update(ci.localId, { item_type: "CashBanked", payment_type: "CashBanked" });
+        }
+        amBanked = amCash.length;
+        amPeriod = foundAm;
+      }
+      // else: no eligible AM cash -> amPeriod stays undefined, treat as own-service only
+    }
+    const combined = amPeriod !== undefined;
+
     await db.periods.update(periodLocalId, {
       depositBlob: deposit.blob,
       depositFileName: deposit.fileName,
@@ -530,12 +563,24 @@ export async function markCashBanked(
       depositObjectKey,
       depositHash,
       depositSize: deposit.blob.size,
+      // Banked-cash coverage: who this slip covers.
+      depositCoverage: combined ? "CombinedWeek" : "OwnService",
+      depositCoversServices: combined ? ["AM", "PM"] : [period.service],
       updatedAt: now(),
     });
     for (const ci of cashItems) {
       await db.lineItems.update(ci.localId, { item_type: "CashBanked", payment_type: "CashBanked" });
     }
-    return cashItems.length;
+    if (amPeriod) {
+      // The AM period is covered by this PM slip; it must not prompt for its own slip and is
+      // re-queued so the Sync_Engine records its coverage once both periods have server ids.
+      await db.periods.update(amPeriod.localId, {
+        coveredByDepositPeriodLocalId: periodLocalId,
+        updatedAt: now(),
+        localStatus: "pending",
+      });
+    }
+    return cashItems.length + amBanked;
   });
 }
 
@@ -557,6 +602,27 @@ export async function listPriests(congregationId: string): Promise<OfficerLookup
 export async function getProofMandatory(congregationId: string): Promise<boolean> {
   const settings = await db.congregationSettings.get(congregationId);
   return settings?.proof_mandatory ?? false;
+}
+
+// ─── Same-week AM banking info (combine/separate prompt support, design §4) ──
+// Used in the PM capture to decide whether to prompt COMBINE vs KEEP SEPARATE. "hasCash"
+// is any cash-origin line (eligible or already banked); "hasSlip" is true when the AM cash
+// is already covered by its own slip or a combined slip.
+export async function getSameWeekAmBankingInfo(
+  period: Pick<LocalPeriod, "congregationId" | "weekKey">
+): Promise<{ exists: boolean; hasCash: boolean; hasSlip: boolean }> {
+  const amKey = naturalKeyOf(period.congregationId, period.weekKey, "AM");
+  const am = await db.periods.where("naturalKey").equals(amKey).first();
+  if (!am) return { exists: false, hasCash: false, hasSlip: false };
+  const items = await getLineItems(am.localId);
+  const hasCash = items.some(
+    (i) =>
+      (["Cash", "CashPending", "CashBanked"].includes(i.item_type) &&
+        ["Members", "Officers"].includes(i.section)) ||
+      i.item_type === "Burial"
+  );
+  const hasSlip = !!am.depositObjectKey || !!am.coveredByDepositPeriodLocalId;
+  return { exists: true, hasCash, hasSlip };
 }
 
 // ─── Override audit (Elder/Chairperson 'O' at submit, offline) ───────────────

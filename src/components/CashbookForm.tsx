@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hasPermission, isOverrideAction, logSelfReviewException } from "@/lib/permissions";
 import { resolveSignOff } from "@/lib/completeCapture";
+import { resolveDepositPrompt } from "@/lib/depositCombination";
 import { createClient } from "@/lib/supabase/client";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { db } from "@/db/schema";
@@ -78,6 +79,9 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
   const [elderComment, setElderComment] = useState(period.elderApprovalComment ?? "");
   const [requestorComment, setRequestorComment] = useState(period.requestorComment ?? "");
   const [proofTarget, setProofTarget] = useState<{ mode: "item" | "cash"; localId?: string } | null>(null);
+  // Banked-cash combine/separate prompt (PM capture; design §4): holds the captured slip
+  // until the user chooses COMBINE (one slip for AM + PM) or KEEP SEPARATE (PM only).
+  const [combinePrompt, setCombinePrompt] = useState<ProofResult | null>(null);
 
   // Capture-bar form
   const [officerId, setOfficerId] = useState("");
@@ -346,18 +350,39 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
     onChanged();
   }
 
+  // Bank the captured cash slip with the chosen coverage, then refresh.
+  async function bankCash(result: ProofResult, coverage: "OwnService" | "CombinedWeek") {
+    const banked = await capture.markCashBanked(
+      period.localId,
+      { blob: result.blob, fileName: result.fileName, date: result.date, bankRef: result.bankRef },
+      { coverage }
+    );
+    // Task 8: eligibility is re-checked inside the repo transaction; 0 => nothing was banked
+    // (e.g. a stale screen) and NO deposit was recorded.
+    if (banked === 0) setToast("No pending cash was available to bank; no deposit was recorded.");
+    await reload();
+    onChanged();
+  }
+
   async function onProofSaved(result: ProofResult) {
     if (!proofTarget) return;
     if (proofTarget.mode === "cash") {
-      const banked = await capture.markCashBanked(period.localId, {
-        blob: result.blob,
-        fileName: result.fileName,
-        date: result.date,
-        bankRef: result.bankRef,
+      // Design §4: in the PM capture, if the same-week AM also had cash with no slip yet,
+      // prompt to COMBINE (one slip for AM + PM) or KEEP SEPARATE. Otherwise bank own-service.
+      const am = await capture.getSameWeekAmBankingInfo(period);
+      const prompt = resolveDepositPrompt({
+        currentService: period.service,
+        currentHasCash: eligibleCash.length > 0,
+        sameWeekAmExists: am.exists,
+        sameWeekAmHasCash: am.hasCash,
+        sameWeekAmHasSlip: am.hasSlip,
       });
-      // Task 8: eligibility is re-checked inside the repo transaction; 0 => nothing was banked
-      // (e.g. a stale screen) and NO deposit was recorded.
-      if (banked === 0) setToast("No pending cash was available to bank; no deposit was recorded.");
+      if (prompt === "combine-or-separate") {
+        setCombinePrompt(result); // defer banking until the user chooses
+        return;
+      }
+      await bankCash(result, "OwnService");
+      return;
     } else if (proofTarget.localId) {
       // Task 4: apply any stashed amount/date edit TOGETHER with its replacement proof, so the
       // corrected values and the fresh, version-bound proof commit as one consistent change.
@@ -622,6 +647,28 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
               <div className="flex gap-2 justify-end">
                 <Button size="sm" variant="outline" onClick={() => setDraftPrompt(false)}>Continue editing</Button>
                 <Button size="sm" onClick={() => { setDraftPrompt(false); void doSaveReturn(); }}>Leave without adding</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {combinePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="alertdialog" aria-modal="true">
+          <Card className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">One deposit or two?</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-[11px] text-muted-foreground">
+                This week's AM service also had cash with no deposit slip yet. Does this slip cover BOTH the AM and PM
+                cash (banked together), or just this PM service's cash?
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button size="sm" onClick={() => { const r = combinePrompt; setCombinePrompt(null); void bankCash(r, "CombinedWeek"); }}>
+                  Combine — one slip for AM + PM
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => { const r = combinePrompt; setCombinePrompt(null); void bankCash(r, "OwnService"); }}>
+                  Keep separate — this PM service only
+                </Button>
               </div>
             </CardContent>
           </Card>

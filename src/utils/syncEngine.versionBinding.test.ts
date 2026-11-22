@@ -12,6 +12,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const rec = vi.hoisted(() => ({
   uploads: [] as { path: string; bytes: string }[],
   attachInserts: [] as Record<string, unknown>[],
+  slipUpserts: [] as Record<string, unknown>[],
+  coverageUpserts: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -29,7 +31,12 @@ vi.mock("@/lib/supabase/client", () => ({
     from: (table: string) => {
       let op: string | null = null;
       const b = {
-        upsert() { op = "upsert"; return b; },
+        upsert(v: Record<string, unknown>) {
+          op = "upsert";
+          if (table === "cashbook_deposit_slip") rec.slipUpserts.push(v);
+          if (table === "cashbook_deposit_slip_period") rec.coverageUpserts.push(v);
+          return b;
+        },
         insert(v: Record<string, unknown>) {
           op = "insert";
           if (table === "cashbook_attachment") rec.attachInserts.push(v);
@@ -48,6 +55,8 @@ vi.mock("@/lib/supabase/client", () => ({
             return resolve(op === "insert" ? { data: [{ id: "att-1" }], error: null } : { data: [], error: null });
           }
           if (table === "cashbook_period") return resolve({ data: [{ id: "srv-p1" }], error: null });
+          if (table === "cashbook_deposit_slip") return resolve({ data: { id: "slip-1" }, error: null });
+          if (table === "cashbook_deposit_slip_period") return resolve({ data: null, error: null });
           return resolve({ data: null, error: null });
         },
       };
@@ -90,6 +99,8 @@ beforeEach(async () => {
   await db.syncMeta.clear();
   rec.uploads = [];
   rec.attachInserts = [];
+  rec.slipUpserts = [];
+  rec.coverageUpserts = [];
 });
 
 describe("Task 3: individual proof version binding", () => {
@@ -115,8 +126,8 @@ describe("Task 3: individual proof version binding", () => {
   });
 });
 
-describe("Task 3: shared deposit slip version binding", () => {
-  it("uploads the current slip key + bytes and writes attachment date/bankRef from the SAME version", async () => {
+describe("Task 3: shared deposit slip version binding (deposit-slip model, design §4.3)", () => {
+  it("uploads the current slip key + bytes and records the deposit slip date/bankRef/object_key from the SAME version", async () => {
     await db.periods.add(makePeriod({
       depositBlob: new Blob(["SLIP"], { type: "image/jpeg" }),
       depositFileName: "d.jpg",
@@ -131,12 +142,48 @@ describe("Task 3: shared deposit slip version binding", () => {
       serverId: "srv-li-1", localStatus: "synced", proofBlob: null, officer_id: null,
     }));
     await syncPending();
+    // Slip object uploaded once, with the bound key + bytes.
     expect(rec.uploads).toHaveLength(1);
     expect(rec.uploads[0].path).toContain("p1-depNEW-deposit-slip.jpg");
     expect(rec.uploads[0].bytes).toBe("SLIP");
-    expect(rec.attachInserts).toHaveLength(1);
-    expect(rec.attachInserts[0].transaction_date).toBe("2026-11-02");
-    expect(rec.attachInserts[0].bank_reference).toBe("DEP-REF");
+    // Coverage is recorded on the deposit-slip model (NOT per-line cashbook_attachment).
+    expect(rec.attachInserts).toHaveLength(0);
+    expect(rec.slipUpserts).toHaveLength(1);
+    expect(rec.slipUpserts[0].coverage).toBe("AM"); // own-service slip
+    expect(rec.slipUpserts[0].object_key).toContain("p1-depNEW-deposit-slip.jpg");
+    expect(rec.slipUpserts[0].deposit_date).toBe("2026-11-02");
+    expect(rec.slipUpserts[0].bank_reference).toBe("DEP-REF");
+    // One coverage row linking the slip to this (own) period.
+    expect(rec.coverageUpserts).toHaveLength(1);
+    expect(rec.coverageUpserts[0].slip_id).toBe("slip-1");
+    expect(rec.coverageUpserts[0].period_id).toBe("srv-p1");
+    // Slip bytes released once acked.
+    expect((await db.periods.get("p1"))?.depositBlob).toBeNull();
+  });
+
+  it("a combined (PM) slip covers BOTH the PM and the same-week AM period", async () => {
+    // AM period already synced; PM period holds the combined slip.
+    await db.periods.add(makePeriod({
+      localId: "pAM", naturalKey: "cong1|2020-01-W1|AM", service: "AM",
+      serverId: "srv-am", localStatus: "synced",
+    }));
+    await db.periods.add(makePeriod({
+      localId: "pPM", naturalKey: "cong1|2020-01-W1|PM", service: "PM",
+      depositBlob: new Blob(["SLIP"], { type: "image/jpeg" }), depositFileName: "d.jpg",
+      depositObjectKey: "pPM-dep-deposit-slip.jpg", depositHash: "h", depositSize: 4,
+      depositDate: "2026-11-02", depositBankRef: "DEP-REF",
+      depositCoverage: "CombinedWeek", depositCoversServices: ["AM", "PM"],
+    }));
+    await db.lineItems.add(makeItem({
+      localId: "liPM", periodLocalId: "pPM", item_type: "CashBanked", payment_type: "CashBanked",
+      serverId: "srv-li-pm", localStatus: "synced", proofBlob: null, officer_id: null,
+    }));
+    await syncPending();
+    expect(rec.slipUpserts).toHaveLength(1);
+    expect(rec.slipUpserts[0].coverage).toBe("Combined");
+    // Two coverage rows: the PM (own) period and the same-week AM period.
+    const coveredPeriodIds = rec.coverageUpserts.map((c) => c.period_id).sort();
+    expect(coveredPeriodIds).toEqual(["srv-am", "srv-p1"].sort()); // PM period resolves to srv-p1 (rpc stub)
   });
 });
 

@@ -82,6 +82,69 @@ describe("Task 8 - Mark Banked eligibility", () => {
   });
 });
 
+describe("Banked-cash combined coverage (design §4.2)", () => {
+  async function amPmPair() {
+    const am = await getOrCreateLocalPeriod({
+      congregationId: "c1", weekKey: "2020-01-W1", service: "AM",
+      year: 2020, month: 1, week: 1, userId: "u1",
+    });
+    const pm = await getOrCreateLocalPeriod({
+      congregationId: "c1", weekKey: "2020-01-W1", service: "PM",
+      year: 2020, month: 1, week: 1, userId: "u1",
+    });
+    return { am, pm };
+  }
+
+  it("9. CombinedWeek banks the PM cash AND the same-week AM cash under one slip, sets cross-refs", async () => {
+    const { am, pm } = await amPmPair();
+    await addLineItem(am.localId, "Members", { officer_id: "A", type: "Cash", amount: 40 });
+    await addLineItem(pm.localId, "Members", { officer_id: "A", type: "Cash", amount: 60 });
+
+    const n = await markCashBanked(pm.localId, DEP(), { coverage: "CombinedWeek" });
+    expect(n).toBe(2); // PM cash + AM cash both banked
+
+    const pmFresh = await db.periods.get(pm.localId);
+    expect(pmFresh?.depositBlob).toBeTruthy();
+    expect(pmFresh?.depositCoverage).toBe("CombinedWeek");
+    expect(pmFresh?.depositCoversServices).toEqual(["AM", "PM"]);
+
+    const amFresh = await db.periods.get(am.localId);
+    expect(amFresh?.coveredByDepositPeriodLocalId).toBe(pm.localId);
+    expect(amFresh?.depositBlob).toBeFalsy(); // the slip lives on the PM period only
+
+    // Both periods' eligible cash is now CashBanked.
+    expect((await getLineItems(am.localId)).every((i) => i.item_type === "CashBanked")).toBe(true);
+    expect((await getLineItems(pm.localId)).every((i) => i.item_type === "CashBanked")).toBe(true);
+  });
+
+  it("10. OwnService (default) banks only the current period and sets own-service coverage", async () => {
+    const { am, pm } = await amPmPair();
+    await addLineItem(am.localId, "Members", { officer_id: "A", type: "Cash", amount: 40 });
+    await addLineItem(pm.localId, "Members", { officer_id: "A", type: "Cash", amount: 60 });
+
+    const n = await markCashBanked(pm.localId, DEP()); // default OwnService
+    expect(n).toBe(1); // only the PM cash
+
+    const pmFresh = await db.periods.get(pm.localId);
+    expect(pmFresh?.depositCoverage).toBe("OwnService");
+    expect(pmFresh?.depositCoversServices).toEqual(["PM"]);
+
+    const amFresh = await db.periods.get(am.localId);
+    expect(amFresh?.coveredByDepositPeriodLocalId ?? null).toBeNull(); // AM untouched
+    expect((await getLineItems(am.localId)).every((i) => i.item_type === "Cash")).toBe(true);
+  });
+
+  it("CombinedWeek with no eligible AM cash falls back to own-service coverage", async () => {
+    const { pm } = await amPmPair(); // AM exists but has no cash
+    await addLineItem(pm.localId, "Members", { officer_id: "A", type: "Cash", amount: 60 });
+    const n = await markCashBanked(pm.localId, DEP(), { coverage: "CombinedWeek" });
+    expect(n).toBe(1);
+    const pmFresh = await db.periods.get(pm.localId);
+    expect(pmFresh?.depositCoverage).toBe("OwnService");
+    expect(pmFresh?.depositCoversServices).toEqual(["PM"]);
+  });
+});
+
 describe("Task 12 - edit marks a synced row pending and preserves capture date + proof", () => {
   it("cash amount edit: amount changes, transaction_date + proof preserved, localStatus -> pending", async () => {
     const p = await newPeriod();

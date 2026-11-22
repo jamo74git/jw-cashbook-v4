@@ -551,6 +551,13 @@ async function syncLineItem(
   await finalizeLineItem(item, ctx);
 }
 
+// Banked-cash deposit slip (design §4.3). The slip OBJECT is uploaded once to the
+// cashbook-proofs bucket on a normal per-service path (reusing Tranche 4's upload/read
+// policies unchanged). Coverage is then recorded LOGICALLY in cashbook_deposit_slip (+
+// cashbook_deposit_slip_period) rather than as per-line cashbook_attachment rows, so a
+// COMBINED slip can cover two periods (AM+PM) of the same week without disturbing the
+// applied Tranche 4 attachment binding. A combined slip is retained + retried until the
+// covered AM period has a server id.
 async function syncDepositSlip(
   supabase: SB,
   periodServerId: string,
@@ -565,41 +572,80 @@ async function syncDepositSlip(
     return;
   }
 
-  // Area 1: bind the deposit version (key+bytes+hash+size) from one fresh read.
+  // The slip must correspond to this period's banked cash, and every banked line must have a
+  // server id (the lines must have synced first) before coverage is recorded. R02: otherwise
+  // retain the slip and retry.
+  const banked = items.filter((i) => i.item_type === "CashBanked");
+  if (banked.length === 0) {
+    throw new Error("Deposit slip retained: no banked cash on this period yet");
+  }
+  for (const bi of banked) {
+    const current = await db.lineItems.get(bi.localId);
+    if (!current?.serverId) {
+      throw new Error("Deposit slip retained: not every banked item has a confirmed server id yet");
+    }
+  }
+
+  // Coverage + covered period server ids. A combined slip (captured on the PM service) also
+  // covers the same-week AM period, which must have synced first (R02: retain + retry).
+  const combined = period.depositCoverage === "CombinedWeek";
+  const coverage = combined ? "Combined" : period.service;
+  const coveredPeriodIds: string[] = [periodServerId];
+  if (combined) {
+    const amKey = `${period.congregationId}|${period.weekKey}|AM`;
+    const amPeriod = await db.periods.where("naturalKey").equals(amKey).first();
+    const amServerId = amPeriod?.serverId ?? null;
+    if (!amServerId) {
+      throw new Error("Deposit slip retained: the combined AM period is not yet synced");
+    }
+    coveredPeriodIds.push(amServerId);
+  }
+
+  // Area 1: bind the deposit version (key+bytes+hash+size+metadata) from one fresh read.
   const bound = await bindDepositProof(period.localId);
   if (!bound) return;
   const path = buildProofPath(period, bound.key);
-  const banked = items.filter((i) => i.item_type === "CashBanked");
+  await uploadProofStable(supabase, path, bound);
 
-  let allAcked = banked.length > 0;
-  let uploaded = false;
+  // Upsert the slip (idempotent on the congregation-week-coverage key) and read back its id.
+  // Lost-ack safe via on-conflict idempotency. Task 3: date + bank ref come from the SAME
+  // bound version as the uploaded bytes/key.
+  const { data: slipRow, error: slipErr } = await supabase
+    .from("cashbook_deposit_slip")
+    .upsert(
+      {
+        congregation_id: period.congregationId,
+        year: period.year,
+        month: period.month,
+        week: period.week,
+        coverage,
+        object_key: path,
+        deposit_date: bound.date,
+        bank_reference: bound.bankRef,
+        created_by: period.capturedByUserId,
+      },
+      { onConflict: "congregation_id,year,month,week,coverage" }
+    )
+    .select("id")
+    .single();
+  if (slipErr) throw new Error(`deposit slip upsert failed: ${slipErr.message}`);
+  const slipId = (slipRow?.id as string) ?? "";
+  if (!slipId) throw new Error("deposit slip upsert did not return a server id"); // R02
+
+  // Record coverage for each covered period (the §2 server trigger rejects any cross-week row).
+  for (const pid of coveredPeriodIds) {
+    const { error: covErr } = await supabase
+      .from("cashbook_deposit_slip_period")
+      .upsert({ slip_id: slipId, period_id: pid }, { onConflict: "slip_id,period_id" });
+    if (covErr) throw new Error(`deposit slip coverage insert failed: ${covErr.message}`);
+  }
+
+  // Display parity (design §4.3 step 4; no longer required by review_ready): mark this
+  // period's banked lines Deposited server-side, then locally. R03: require the affected row.
   for (const bi of banked) {
     const current = await db.lineItems.get(bi.localId);
     const lineServerId = current?.serverId;
-    if (!lineServerId) {
-      allAcked = false; // R02: required banked item has no server id yet
-      continue;
-    }
-    if (!uploaded) {
-      await uploadProofStable(supabase, path, bound);
-      uploaded = true;
-    }
-    const { data: existing, error: selErr } = await supabase
-      .from("cashbook_attachment").select("id").eq("line_item_id", lineServerId).eq("file_url", path).limit(1);
-    if (selErr) throw new Error(selErr.message);
-    if (!existing || existing.length === 0) {
-      const { data: ins, error: insErr } = await supabase.from("cashbook_attachment").insert({
-        line_item_id: lineServerId,
-        file_url: path,
-        // Task 3: deposit date + bank ref bound to the same slip version as the bytes/key.
-        transaction_date: bound.date,
-        bank_reference: bound.bankRef,
-        congregation_id: period.congregationId,
-        uploaded_by: period.capturedByUserId,
-      }).select("id");
-      if (insErr) throw new Error(insErr.message);
-      requireOneRow(ins as { id?: string }[] | null, "deposit attachment insert");
-    }
+    if (!lineServerId) continue;
     const { data: stRows, error: stErr } = await supabase
       .from("cashbook_line_item").update({ proof_status: "Deposited" }).eq("id", lineServerId).select("id");
     if (stErr) throw new Error(stErr.message);
@@ -607,9 +653,6 @@ async function syncDepositSlip(
     await db.lineItems.update(bi.localId, { proof_status: "Deposited" });
   }
 
-  if (!allAcked) {
-    throw new Error("Deposit slip retained: not every banked item has a confirmed server id/attachment yet");
-  }
   // Area 1: release slip bytes only in a txn and only if this identity is still current.
   await db.transaction("rw", db.periods, async () => {
     const fresh = await db.periods.get(period.localId);
@@ -619,7 +662,6 @@ async function syncDepositSlip(
       ctx.pendingRemains = true;
     }
   });
-  void periodServerId;
 }
 
 async function persistConflictAudit(

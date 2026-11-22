@@ -12,6 +12,7 @@
 import Dexie, { type Table } from "dexie";
 import type { Role, HierarchyLevel, LineSection } from "@/lib/types";
 import type { RequiredManifest } from "@/lib/completeCapture";
+import type { DepositCoverage } from "@/lib/depositCombination";
 import type {
   AttendanceType,
   CensusBucket,
@@ -206,6 +207,15 @@ export interface LocalPeriod {
   // Tranche 4 r2 (R06): deposit-slip integrity expectation.
   depositHash?: string | null;
   depositSize?: number | null;
+  // ── Banked-cash deposit coverage (additive, optional, non-indexed; no .stores() change) ──
+  // A slip may cover only its own service's cash ("OwnService") or be a COMBINED slip
+  // covering the AM+PM cash of the SAME week ("CombinedWeek"). The combine/separate choice
+  // is recorded in the PM capture (design §4). On the slip-holding (PM) period:
+  depositCoverage?: DepositCoverage | null;
+  depositCoversServices?: ("AM" | "PM")[] | null;
+  // On the covered (AM) period: the localId of the PM period whose slip covers this AM cash,
+  // so its Banking tab shows "banked (combined)" and does not prompt for its own slip.
+  coveredByDepositPeriodLocalId?: string | null;
   localStatus: LocalSyncStatus;
   createdAt: string;
   updatedAt: string;
