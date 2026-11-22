@@ -17,10 +17,13 @@ import type { Role } from "@/lib/types";
 import { hasPermission } from "@/lib/permissions";
 import { isBalanced, type CaptureItem, type ItemType } from "@/lib/captureTotals";
 
-// Item types that require supporting evidence (mirrors CashbookForm `needsProof` plus
-// CashBanked cash, which is evidenced by the shared deposit slip).
-const PROOF_REQUIRED_TYPES: ItemType[] = ["EFT", "DirectDebit", "Burial", "Expense", "CashBanked"];
-const EXEMPT_TYPES: ItemType[] = ["Cash", "CashPending"];
+// Item types that require a per-line attachment (mirrors CashbookForm `needsProof`). Cash
+// (Cash/CashPending/CashBanked) is NOT here: banked cash is evidenced by a banked-cash
+// DEPOSIT SLIP recorded in cashbook_deposit_slip / cashbook_deposit_slip_period, not by a
+// per-line cashbook_attachment (design §4.4). Cash coverage is handled separately in
+// `computeReviewReadiness` via the `cashPresent`/`cashCovered` options.
+const PROOF_REQUIRED_TYPES: ItemType[] = ["EFT", "DirectDebit", "Burial", "Expense"];
+const EXEMPT_TYPES: ItemType[] = ["Cash", "CashPending", "CashBanked"];
 
 export function proofRequiredFor(itemType: string): boolean {
   return (PROOF_REQUIRED_TYPES as string[]).includes(itemType);
@@ -186,22 +189,38 @@ export interface ReviewReadiness {
   ready: boolean;
   balanced: boolean;
   missingEvidenceLineIds: string[];
+  /** True when the period is cash-bearing, proofs are mandatory, and no covering slip exists. */
+  cashCoverageMissing: boolean;
+}
+
+export interface ReviewReadinessOptions {
+  /**
+   * Whether the congregation requires proofs. Mirrors the server `proof_mandatory` gate.
+   * Defaults to `true` so existing callers (and the online audit gate) keep the strict
+   * behaviour; a `false` value skips ALL proof requirements (balanced + manifest only).
+   */
+  proofMandatory?: boolean;
+  /** Whether this period contains cash (any Cash / CashPending / CashBanked line). */
+  cashPresent?: boolean;
+  /** Whether a covering banked-cash deposit slip exists for this period (own or combined). */
+  cashCovered?: boolean;
 }
 
 /**
- * Compute whether a submitted revision is Review_Ready from server-visible rows:
- * every proof-required line has an attachment AND the revision balances. This mirrors
- * the server condition for the UI gate; the server's own computation over
- * `cashbook_submission_manifest` is AUTHORITATIVE (flagged for hosted testing).
+ * Compute whether a submitted revision is Review_Ready, mirroring the server
+ * `cashbook_review_ready` rule (design §4.4):
+ *  - proof NOT mandatory  => ready as soon as the revision balances (skip all proofs);
+ *  - proof mandatory      => every non-cash proof-required line (EFT/DirectDebit/Burial/
+ *    Expense) has an attachment, AND a cash-bearing period has a covering deposit slip.
+ * The server's own computation over `cashbook_submission_manifest` + the deposit-slip model
+ * is AUTHORITATIVE (flagged for hosted testing); this is the local UI mirror.
  */
 export function computeReviewReadiness(
   lines: ReviewEvidenceLine[],
-  attachedLineIds: Iterable<string>
+  attachedLineIds: Iterable<string>,
+  opts?: ReviewReadinessOptions
 ): ReviewReadiness {
-  const attached = new Set(attachedLineIds);
-  const missingEvidenceLineIds = lines
-    .filter((l) => proofRequiredFor(l.item_type) && !attached.has(l.id))
-    .map((l) => l.id);
+  const proofMandatory = opts?.proofMandatory ?? true;
   const ci: CaptureItem[] = lines.map((l) => ({
     section: l.section as CaptureItem["section"],
     item_type: l.item_type as ItemType,
@@ -210,9 +229,20 @@ export function computeReviewReadiness(
     item_count: null,
   }));
   const balanced = isBalanced(ci);
+
+  if (!proofMandatory) {
+    return { ready: balanced, balanced, missingEvidenceLineIds: [], cashCoverageMissing: false };
+  }
+
+  const attached = new Set(attachedLineIds);
+  const missingEvidenceLineIds = lines
+    .filter((l) => proofRequiredFor(l.item_type) && !attached.has(l.id))
+    .map((l) => l.id);
+  const cashCoverageMissing = (opts?.cashPresent ?? false) && !(opts?.cashCovered ?? false);
   return {
-    ready: balanced && missingEvidenceLineIds.length === 0,
+    ready: balanced && missingEvidenceLineIds.length === 0 && !cashCoverageMissing,
     balanced,
     missingEvidenceLineIds,
+    cashCoverageMissing,
   };
 }
