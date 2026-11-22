@@ -5,6 +5,7 @@
 import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "@/db/schema";
+import { localTodayISO } from "@/lib/captureTotals";
 import {
   getOrCreateLocalPeriod,
   addLineItem,
@@ -128,24 +129,23 @@ describe("Task 1 - future transaction-date guard (repo backstop)", () => {
     ).rejects.toThrow(/future/i);
   });
 
-  it("rejects a future Burial transaction date in addLineItem", async () => {
+  it("Burial dates at today, ignoring any supplied date (date of capture governance)", async () => {
     const p = await newPeriod();
-    await expect(
-      addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2999-01-01" })
-    ).rejects.toThrow(/future/i);
-  });
-
-  it("honours a past Burial transaction date (consistent with Expenses) instead of forcing today", async () => {
-    const p = await newPeriod();
+    // A supplied past date is ignored: the Burial line is dated at the date of capture (today).
     const id = await addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2020-01-05" });
     const item = await db.lineItems.get(id);
-    expect(item?.transaction_date).toBe("2020-01-05");
+    expect(item?.transaction_date).toBe(localTodayISO());
   });
 
-  it("rejects a future transaction date when editing a Burial/Expense entry via updateLineItem", async () => {
+  it("Burial never stores a future date, even if one is supplied (forced to today, no throw)", async () => {
     const p = await newPeriod();
-    const burialId = await addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2020-01-05" });
-    await expect(updateLineItem(burialId, { transaction_date: "2999-01-01" })).rejects.toThrow(/future/i);
+    const id = await addLineItem(p.localId, "Burial", { amount: 50, receipt_number: "R1", transaction_date: "2999-01-01" });
+    const item = await db.lineItems.get(id);
+    expect(item?.transaction_date).toBe(localTodayISO());
+  });
+
+  it("rejects a future transaction date when editing an Expense entry via updateLineItem", async () => {
+    const p = await newPeriod();
     const expenseId = await addLineItem(p.localId, "Expenses", { amount: 100, description: "E", transaction_date: "2020-01-05" });
     await expect(updateLineItem(expenseId, { transaction_date: "2999-01-01" })).rejects.toThrow(/future/i);
   });

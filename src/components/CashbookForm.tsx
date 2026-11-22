@@ -16,6 +16,7 @@ import {
   monthlyExpensesExceedThreshold,
   bankingView,
   isFutureDate,
+  localTodayISO,
 } from "@/lib/captureTotals";
 import { syncPending } from "@/utils/syncEngine";
 import { ProofModal, type ProofResult } from "@/capture/ProofModal";
@@ -46,8 +47,10 @@ const hasProofLocally = (i: LocalLineItem) => i.proof_status === "Deposited" || 
 // Pin it to the active theme in BOTH modes (not dark-only) so the typed date and the picker
 // icon stay legible in light AND dark mode. Applied to every date input in this form.
 const DATE_INPUT_CLASS = "[color-scheme:light] dark:[color-scheme:dark]";
-// Non-cash line types that carry a user transaction_date and must never be future-dated.
-const DATED_TYPES = ["EFT", "DirectDebit", "Burial", "Expense"];
+// Non-cash line types that carry a user-chosen transaction_date and must never be future-dated.
+// Burial is NOT here: it is dated at the date of capture (today), not a freely-chosen date -
+// the authoritative per-receipt dates live on the underlying manual burial receipts.
+const DATED_TYPES = ["EFT", "DirectDebit", "Expense"];
 const isDatedType = (t: string) => DATED_TYPES.includes(t);
 
 // Task 6: readable, theme-aware payment-type badge (label + colour; never colour alone).
@@ -308,9 +311,10 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
     if (activeTab === "Burial" && !ref.trim()) return setError("Receipt number is required");
     if (activeTab === "Expenses" && !ref.trim()) return setError("Description is required");
     if ((activeTab === "Burial" || activeTab === "Expenses") && (!amt || amt <= 0)) return setError("Amount must be > 0");
-    // Task 1: a Burial/Expense transaction date (when supplied) may not be beyond the local capture
+    // Task 1: an Expense transaction date (when supplied) may not be beyond the local capture
     // date. The date is optional here, so an empty value is left to default server-/repo-side.
-    if ((activeTab === "Burial" || activeTab === "Expenses") && isFutureDate(txnDate)) return setError("Transaction date cannot be in the future.");
+    // Burial is dated at capture (today), so there is no user date to guard.
+    if (activeTab === "Expenses" && isFutureDate(txnDate)) return setError("Transaction date cannot be in the future.");
 
     const localId = await capture.addLineItem(period.localId, activeTab as Exclude<TabKey, "Banking">, {
       officer_id: officerId || null,
@@ -686,7 +690,17 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
               {activeTab === "Burial" && (
                 <>
                   <Input className="h-9 text-xs w-40" placeholder="Receipt # *" value={ref} onChange={(e) => setRef(e.target.value)} />
-                  <Input type="date" className={`h-9 text-xs w-36 ${DATE_INPUT_CLASS}`} value={txnDate} onChange={(e) => setTxnDate(e.target.value)} />
+                  {/* Burial is dated at the date of capture (today); the authoritative per-receipt
+                      dates live on the underlying manual burial receipts. Pinned + read-only so it
+                      stays legible (DATE_INPUT_CLASS) and cannot be set to a future date. */}
+                  <Input
+                    type="date"
+                    readOnly
+                    aria-readonly="true"
+                    title="Burial is dated at capture (today). Individual receipt dates live on the manual burial receipts."
+                    className={`h-9 text-xs w-36 ${DATE_INPUT_CLASS}`}
+                    value={localTodayISO()}
+                  />
                 </>
               )}
               {activeTab === "Expenses" && (

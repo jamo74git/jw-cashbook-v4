@@ -355,8 +355,9 @@ export async function addLineItem(
 
   if (section === "Burial") {
     item_type = "Burial";
-    // Honour the captured transaction date (consistent with Expenses); default to today when none.
-    transaction_date = input.transaction_date ?? TODAY();
+    // Governance: the Burial line is dated at the DATE OF CAPTURE (today). The authoritative
+    // per-receipt dates live on the underlying manual burial receipts, not on this capture line.
+    transaction_date = TODAY(); // governance: forced today
   } else if (section === "Expenses") {
     item_type = "Expense";
     transaction_date = input.transaction_date ?? TODAY();
@@ -366,11 +367,12 @@ export async function addLineItem(
       item_type === "EFT" || item_type === "DirectDebit" ? input.transaction_date ?? null : TODAY();
   }
 
-  // Task 1: a non-cash transaction date (EFT/DD/Burial/Expense) may not be in the future
+  // Task 1: a non-cash transaction date (EFT/DD/Expense) may not be in the future
   // (device-local date). Earlier dates (incl. capturing an earlier week today) are allowed.
-  // Cash/deposit-slip dates are unaffected.
+  // Burial is always dated today (above) so it cannot be future; cash/deposit-slip dates
+  // are unaffected.
   const isNonCashDated =
-    item_type === "EFT" || item_type === "DirectDebit" || item_type === "Burial" || item_type === "Expense";
+    item_type === "EFT" || item_type === "DirectDebit" || item_type === "Expense";
   if (isNonCashDated && isFutureDate(transaction_date)) {
     throw new Error("Transaction date cannot be in the future.");
   }
@@ -407,7 +409,7 @@ export async function updateLineItem(localId: string, changes: Partial<LocalLine
   if (changes.transaction_date !== undefined) {
     const existing = await db.lineItems.get(localId);
     const t = (changes.item_type ?? existing?.item_type) as string | undefined;
-    const isNonCashDated = t === "EFT" || t === "DirectDebit" || t === "Burial" || t === "Expense";
+    const isNonCashDated = t === "EFT" || t === "DirectDebit" || t === "Expense";
     if (isNonCashDated && isFutureDate(changes.transaction_date)) {
       throw new Error("Transaction date cannot be in the future.");
     }
