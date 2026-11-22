@@ -15,6 +15,7 @@ import { db, type LocalPeriod, type LocalLineItem } from "@/db/schema";
 import { isFutureOacService } from "@/lib/oacWeeks";
 import { filterQueueForActor } from "@/utils/syncActor";
 import { operationDedupeKey } from "@/lib/opLedger";
+import { buildSubmitManifestPayload } from "@/lib/completeCapture";
 
 const BASE_BACKOFF_MS = 2_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
@@ -401,19 +402,35 @@ async function reconcilePeriod(supabase: SB, period: LocalPeriod): Promise<Outco
   }
 
   if (period.status === "Submitted") {
-    // Area 3: require the expected period row before treating submission as acknowledged.
-    const { data: perRows, error } = await supabase
-      .from("cashbook_period")
-      .update({
-        status: "Submitted",
-        submitted_at: period.submittedAt ?? new Date().toISOString(),
-        requestor_comment: period.requestorComment,
-        elder_approval_comment: period.elderApprovalComment,
-      })
-      .eq("id", serverId)
-      .select("id");
-    if (error) throw new Error(error.message);
-    requireOneRow(perRows as { id?: string }[] | null, "period submission");
+    // Submit via the cashbook_submit_period RPC: ONE server transaction freezes the
+    // submission manifest, bumps server_revision, records the submitter, and writes a
+    // SUBMIT audit row + the op-ledger result. This is what makes cashbook_review_ready()
+    // reachable; a direct status='Submitted' Data-API write is now rejected by the
+    // trg_guard_submitted bypass guard. A stable op id (minted at Complete_Capture, or
+    // here for legacy rows) makes a retry after a lost ack idempotent. Fail-closed +
+    // retryable (as the old zero-row/requireOneRow check was): acknowledged ONLY when
+    // there is no error AND the RPC confirms the period is Submitted.
+    let opId = period.submitOpId ?? null;
+    if (!opId) {
+      opId = globalThis.crypto.randomUUID();
+      await db.periods.update(period.localId, { submitOpId: opId });
+    }
+    const manifestPayload = buildSubmitManifestPayload(period.requiredManifest);
+    const fingerprint = `${period.naturalKey}:${period.completeCaptureRevision ?? 1}`;
+    const { data: submitAck, error } = await supabase.rpc("cashbook_submit_period", {
+      p_op_id: opId,
+      p_period_id: serverId,
+      p_payload_fingerprint: fingerprint,
+      p_balanced: manifestPayload.balanced,
+      p_outstanding_proof_count: manifestPayload.outstandingProofCount,
+      p_manifest: manifestPayload.proofs,
+      p_submitted_at: period.submittedAt ?? new Date().toISOString(),
+      p_requestor_comment: period.requestorComment,
+      p_elder_approval_comment: period.elderApprovalComment,
+    });
+    if (error || (submitAck as { status?: string } | null)?.status !== "Submitted") {
+      throw new Error(error?.message ?? "period submission not acknowledged");
+    }
 
     // Area 3: the acting-as audit insert must be acknowledged by its returned row before
     // we mark it flushed. NOTE (reported dependency): if the insert commits server-side but

@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mock = vi.hoisted(() => ({
   rpc: { data: { id: "srv-p1", status: "Draft" } as unknown, error: null as unknown },
+  // cashbook_submit_period acknowledgement (default: a successful Submitted ack).
+  submitRpc: { data: { status: "Submitted", server_revision: 1, capture_generation: 1 } as unknown, error: null as unknown },
   upload: { data: { path: "x" } as unknown, error: null as unknown },
   download: { data: null as unknown, error: null as unknown },
   lineUpsert: { data: { id: "srv-li-1" } as unknown, error: null as unknown },
@@ -28,7 +30,7 @@ function resultFor(table: string, op: string | null): unknown {
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
-    rpc: async () => mock.rpc,
+    rpc: async (fn: string) => (fn === "cashbook_submit_period" ? mock.submitRpc : mock.rpc),
     storage: {
       from: () => ({
         upload: async () => mock.upload,
@@ -94,6 +96,7 @@ beforeEach(async () => {
   await db.lineItems.clear();
   await db.syncMeta.clear();
   mock.rpc = { data: { id: "srv-p1", status: "Draft" }, error: null };
+  mock.submitRpc = { data: { status: "Submitted", server_revision: 1, capture_generation: 1 }, error: null };
   mock.upload = { data: { path: "x" }, error: null };
   mock.download = { data: null, error: null };
   mock.lineUpsert = { data: { id: "srv-li-1" }, error: null };
@@ -279,10 +282,10 @@ describe("Tranche 4 round-2 (Area 1/2/3)", () => {
     expect((await db.lineItems.get("li1"))?.serverId).toBeNull(); // no server write
   });
 
-  it("Area3: a zero-row period submission is not reported successful", async () => {
+  it("Area3: an unacknowledged period submission is not reported successful", async () => {
     await db.periods.add(makePeriod({ status: "Submitted" }));
     await db.lineItems.add(makeItem({ proofBlob: null }));
-    mock.periodUpdate = { data: [], error: null }; // RLS-filtered: 0 rows, no error
+    mock.submitRpc = { data: null, error: null }; // submit RPC did not confirm Submitted
     const r = await syncPending();
     expect(r.failed).toBe(1);
     expect((await db.periods.get("p1"))?.localStatus).toBe("failed");
@@ -359,9 +362,9 @@ describe("Task 1 - zero-value (no line-item) submission sync", () => {
     expect(p?.serverId).toBe("srv-p1"); // reached the server -> visible to the Auditor queue
   });
 
-  it("a zero-value submission whose server period update affects 0 rows is NOT reported synced", async () => {
+  it("a zero-value submission whose submit RPC does not confirm Submitted is NOT reported synced", async () => {
     await db.periods.add(makePeriod({ status: "Submitted", localStatus: "pending" }));
-    mock.periodUpdate = { data: [], error: null }; // not acknowledged (e.g. RLS-filtered)
+    mock.submitRpc = { data: { status: "Draft" }, error: null }; // not acknowledged as Submitted
     const r = await syncPending();
     expect(r.synced).toBe(0);
     expect(r.failed).toBe(1);
