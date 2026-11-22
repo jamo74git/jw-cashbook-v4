@@ -40,18 +40,130 @@ insert into public.user_hierarchy_access (user_id, role, scope_level, congregati
   ('20000000-0000-0000-0000-000000000004','Chairperson','Congregation','aaaaaaaa-0000-0000-0000-000000000001',null,'active', now()-interval '1 day', null)
   on conflict do nothing;
 
+-- Periods are seeded as Draft (server_revision defaults to 0); the submitted,
+-- Review_Ready revision is produced via cashbook_submit_period (FOUNDATION) in the
+-- fixture submit below, NOT a raw insert of server_revision=1 - so a submission manifest
+-- genuinely exists for the completing sign-off in CASE 4 (otherwise cashbook_review_ready
+-- would be false and CASE 4 could never close).
+--   ...01  main period (submitted balanced+empty -> Review_Ready true) for CASES 1-4
+--   ...02  submitted UNBALANCED (cashbook_review_ready false)
+--   ...03  never submitted (no manifest: review_ready false; direct-Submitted guard)
+--   ...04  submitted balanced but with a proof-required line and NO attachment
+--          (evidence-short: review_ready false until an attachment is added)
 insert into public.cashbook_period
-  (id, congregation_id, year, month, week, week_key, service, status, submitted_by, server_revision, capture_generation)
+  (id, congregation_id, year, month, week, week_key, service, status)
 values
-  ('cccccccc-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001',
-   2026, 11, 1, '2026-11-W1', 'AM', 'Submitted', '20000000-0000-0000-0000-000000000001', 1, 1)
+  ('cccccccc-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001', 2026, 11, 1, '2026-11-W1', 'AM', 'Draft'),
+  ('cccccccc-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001', 2026, 11, 2, '2026-11-W2', 'AM', 'Draft'),
+  ('cccccccc-0000-0000-0000-000000000003','aaaaaaaa-0000-0000-0000-000000000001', 2026, 11, 3, '2026-11-W3', 'AM', 'Draft'),
+  ('cccccccc-0000-0000-0000-000000000004','aaaaaaaa-0000-0000-0000-000000000001', 2026, 11, 4, '2026-11-W4', 'AM', 'Draft')
   on conflict do nothing;
 
--- The Chairperson logged ACTING_AS_TREASURER on this capture -> involvement set.
+-- A proof-required EFT line on ...04 with NO attachment -> evidence-short.
+insert into public.cashbook_line_item (id, period_id, section, item_type, amount, is_officer)
+values
+  ('11111111-0000-0000-0000-000000000004','cccccccc-0000-0000-0000-000000000004','Members','EFT', 100, false)
+  on conflict do nothing;
+
+-- The Chairperson logged ACTING_AS_TREASURER on the main capture -> involvement set.
 insert into public.audit_log (user_id, action_type, entity_type, entity_id, comment) values
-  ('20000000-0000-0000-0000-000000000001','SUBMIT','cashbook_period','cccccccc-0000-0000-0000-000000000001','submit'),
   ('20000000-0000-0000-0000-000000000004','ACTING_AS_TREASURER','cashbook_period','cccccccc-0000-0000-0000-000000000001','acted as treasurer')
   on conflict do nothing;
+
+-- ---- Fixture submit (FOUNDATION cashbook_submit_period) --------------------
+-- As the Treasurer (submitter), submit ...01 balanced+empty, ...02 unbalanced, ...04
+-- balanced-but-evidence-short. Each call bumps server_revision 0->1, freezes a manifest,
+-- records submitted_by, and writes a SUBMIT audit row (the submitter's involvement).
+do $$
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub','20000000-0000-0000-0000-000000000001', true);
+  perform public.cashbook_submit_period(
+    gen_random_uuid(), 'cccccccc-0000-0000-0000-000000000001', 'fp-submit-1', true,  0, '[]'::jsonb, now(), 'submit', null);
+  perform public.cashbook_submit_period(
+    gen_random_uuid(), 'cccccccc-0000-0000-0000-000000000002', 'fp-submit-2', false, 0, '[]'::jsonb, now(), 'submit', null);
+  perform public.cashbook_submit_period(
+    gen_random_uuid(), 'cccccccc-0000-0000-0000-000000000004', 'fp-submit-4', true,  1, '[]'::jsonb, now(), 'submit', null);
+  reset role;
+end $$;
+
+-- ===========================================================================
+-- FCASE A (FOUNDATION - submit RPC effects): ...01 is now Submitted at
+-- server_revision = 1, a submission manifest row exists for (period, gen=1, rev=1), and a
+-- SUBMIT audit row was written for the submitting Treasurer. Nothing could set Submitted
+-- or freeze the manifest except the RPC.
+-- ===========================================================================
+do $$
+begin
+  if (select status from public.cashbook_period where id='cccccccc-0000-0000-0000-000000000001') <> 'Submitted'
+     or (select server_revision from public.cashbook_period where id='cccccccc-0000-0000-0000-000000000001') <> 1 then
+    raise exception 'FCASE A FAILED: submit RPC did not set Submitted / server_revision=1';
+  end if;
+  if not exists (select 1 from public.cashbook_submission_manifest
+                  where period_id='cccccccc-0000-0000-0000-000000000001' and capture_generation=1 and revision=1) then
+    raise exception 'FCASE A FAILED: no submission manifest frozen for the submitted revision';
+  end if;
+  if not exists (select 1 from public.audit_log
+                  where entity_id='cccccccc-0000-0000-0000-000000000001' and action_type='SUBMIT'
+                    and user_id='20000000-0000-0000-0000-000000000001') then
+    raise exception 'FCASE A FAILED: SUBMIT audit row not written for the submitter';
+  end if;
+  raise notice 'FCASE A ok: submit RPC froze the manifest, bumped the revision, audited SUBMIT';
+end $$;
+
+-- ===========================================================================
+-- FCASE B (FOUNDATION - cashbook_review_ready): false without a manifest (...03 never
+-- submitted), false for the WRONG revision, false when unbalanced (...02), false when a
+-- proof-required line lacks an attachment (...04), and true only when balanced + fully
+-- evidenced (...01, balanced + no proof-required lines).
+-- ===========================================================================
+do $$
+begin
+  if public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000003', 0) then
+    raise exception 'FCASE B FAILED: review_ready true without a manifest';
+  end if;
+  if public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000001', 2) then
+    raise exception 'FCASE B FAILED: review_ready true for a non-current revision';
+  end if;
+  if public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000002', 1) then
+    raise exception 'FCASE B FAILED: review_ready true for an UNBALANCED manifest';
+  end if;
+  if public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000004', 1) then
+    raise exception 'FCASE B FAILED: review_ready true while a proof-required line lacks an attachment';
+  end if;
+  if not public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000001', 1) then
+    raise exception 'FCASE B FAILED: review_ready NOT true for a balanced, fully-evidenced revision';
+  end if;
+  -- Add the missing attachment to ...04's EFT line -> it becomes Review_Ready.
+  insert into public.cashbook_attachment (line_item_id, file_url, congregation_id, uploaded_by)
+  values ('11111111-0000-0000-0000-000000000004',
+          'aaaaaaaa-0000-0000-0000-000000000001/2026/11/AM_2026-11-W4/20000000-0000-0000-0000-000000000001/x-proof.jpg',
+          'aaaaaaaa-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001');
+  if not public.cashbook_review_ready('cccccccc-0000-0000-0000-000000000004', 1) then
+    raise exception 'FCASE B FAILED: review_ready NOT true once evidence is attached';
+  end if;
+  raise notice 'FCASE B ok: review_ready false without manifest / wrong rev / unbalanced / evidence-short, true when balanced+evidenced';
+end $$;
+
+-- ===========================================================================
+-- FCASE C (FOUNDATION - Submitted bypass guard): a DIRECT status UPDATE to Submitted on
+-- the still-Draft ...03 is rejected by trg_guard_submitted (no cashbook.submit_rpc GUC),
+-- even for an in-scope authenticated user. Expect SQLSTATE 42501. This makes submit
+-- consistent with the AuditApproved bypass guard: Submitted only via the submit RPC.
+-- ===========================================================================
+do $$
+begin
+  set local role authenticated;
+  perform set_config('request.jwt.claim.sub','20000000-0000-0000-0000-000000000001', true);
+  begin
+    update public.cashbook_period set status = 'Submitted'
+     where id = 'cccccccc-0000-0000-0000-000000000003';
+    raise exception 'FCASE C FAILED: direct update to Submitted was NOT blocked';
+  exception when insufficient_privilege then
+    raise notice 'FCASE C ok: direct Submitted update blocked by trg_guard_submitted';
+  end;
+  reset role;
+end $$;
 
 -- ===========================================================================
 -- CASE 1 (acceptance - bypass closure): a DIRECT status UPDATE to AuditApproved is
