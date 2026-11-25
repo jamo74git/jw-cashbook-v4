@@ -8,6 +8,7 @@ import {
   CENSUS_EDIT,
   CAPTURE_R0_CONFIRM,
   MONTH_SUBMIT,
+  OFFICER_FAITHFULNESS_VIEW,
   logActingAsTreasurer,
 } from "@/lib/permissions";
 import * as capture from "@/db/captureRepo";
@@ -231,6 +232,7 @@ function CaptureLanding({
   const [showSyncHelp, setShowSyncHelp] = useState(false);
 
   const canSubmitMonth = hasPermission(role, MONTH_SUBMIT);
+  const canViewFaithfulness = hasPermission(role, OFFICER_FAITHFULNESS_VIEW);
 
   async function handleSubmitMonth() {
     setMonthBusy(true);
@@ -294,21 +296,30 @@ function CaptureLanding({
           </p>
         </KpiCard>
 
-        <KpiCard title="Officer Faithfulness">
-          <p className="text-2xl font-bold">{kpis.faithfulness}</p>
-          <p className="text-xs text-muted-foreground">0 in last 4 periods</p>
-        </KpiCard>
+        {canViewFaithfulness && (
+          <KpiCard
+            title="Officer Faithfulness"
+            onSelect={() => navigate("/dashboard/officer-faithfulness")}
+          >
+            <p className="text-2xl font-bold">{kpis.faithfulness}</p>
+            <p className="text-xs text-muted-foreground">
+              {kpis.faithfulness === 1 ? "officer has" : "officers have"} no tithe recorded in the last 4 periods. Select to see who.
+            </p>
+          </KpiCard>
+        )}
 
-        {/* Interim In Use — amber-styled per the existing R500 governance block. */}
-        <Card className="border-amber-300 bg-amber-50 text-amber-800">
-          <CardHeader className="p-3 pb-0">
-            <CardTitle className="text-xs font-semibold leading-none">Interim In Use</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-1">
-            <p className="text-2xl font-bold">{kpis.interim}</p>
-            <p className="text-xs">Interim officers this month</p>
-          </CardContent>
-        </Card>
+        {/* Interim In Use — amber-styled per the existing R500 governance block. Shown only when relevant. */}
+        {kpis.interim > 0 && (
+          <Card className="border-amber-300 bg-amber-50 text-amber-800">
+            <CardHeader className="p-3 pb-0">
+              <CardTitle className="text-xs font-semibold leading-none">Interim In Use</CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-1">
+              <p className="text-2xl font-bold">{kpis.interim}</p>
+              <p className="text-xs">Interim officers this month</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* All weeks Closed -> Chair/Elder may bulk-submit the month to the Overseer. */}
@@ -683,9 +694,33 @@ function monthName(month: number): string {
   return MONTH_NAMES[month - 1] ?? String(month);
 }
 
-function KpiCard({ title, children }: { title: string; children: React.ReactNode }) {
+function KpiCard({
+  title,
+  children,
+  onSelect,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onSelect?: () => void;
+}) {
   return (
-    <Card>
+    <Card
+      {...(onSelect
+        ? {
+            role: "button",
+            tabIndex: 0,
+            onClick: onSelect,
+            onKeyDown: (e: React.KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            },
+            className:
+              "cursor-pointer transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          }
+        : {})}
+    >
       <CardHeader className="p-3 pb-0">
         <CardTitle className="text-xs font-semibold leading-none text-muted-foreground">
           {title}

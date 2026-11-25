@@ -20,6 +20,9 @@ const PERMISSIONS: Record<string, Record<Role, PermCode>> = {
   "dashboard.home": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "-", Treasurer: "-", Secretary: "-" },
   "dashboard.kpi": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "-", Secretary: "-" },
 
+  // Officer Faithfulness card + detail page: Chairperson and Elder only (not Treasurer).
+  "dashboard.officer_faithfulness": { HO: "-", Apostle: "-", Overseer: "-", Elder: "V", Chairperson: "V", Auditor: "-", Treasurer: "-", Secretary: "-" },
+
   // ── Member Tithing Capture ──────────────────────────────────────────────
   "capture.view": { HO: "V", Apostle: "V", Overseer: "V", Elder: "V", Chairperson: "V", Auditor: "V", Treasurer: "V", Secretary: "T" },
   "capture.create": { HO: "-", Apostle: "-", Overseer: "-", Elder: "O", Chairperson: "C", Auditor: "-", Treasurer: "C", Secretary: "-" },
@@ -134,6 +137,7 @@ export const CENSUS_EDIT = "census.manage_edit";
 // MVP hardening v5 capability keys (matrix-driven; no role-string checks in the UI).
 export const CAPTURE_R0_CONFIRM = "capture.r0_confirm";
 export const MONTH_SUBMIT = "month.bulk_submit_to_overseer";
+export const OFFICER_FAITHFULNESS_VIEW = "dashboard.officer_faithfulness";
 
 // ─── Core Permission Check Functions ────────────────────────────────────────
 

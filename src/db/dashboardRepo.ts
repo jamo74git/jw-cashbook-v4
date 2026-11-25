@@ -87,7 +87,20 @@ export async function getThisMonthCapturedVsBanked(congregationId: string): Prom
 }
 
 // ─── KPI 3: Officer faithfulness (active officers with 0 in the last 4 periods) ──
-export async function countOfficerFaithfulness(congregationId: string): Promise<number> {
+export interface FaithfulnessOfficer {
+  id: string;
+  officer_code: string;
+  first_name: string;
+  last_name: string | null;
+  rank: string;
+  is_interim: boolean;
+}
+
+/**
+ * Active cached officers with no line (any section/type) in the 4 most recent local
+ * periods. countOfficerFaithfulness is the length of this list.
+ */
+export async function listOfficersWithoutRecentTithe(congregationId: string): Promise<FaithfulnessOfficer[]> {
   const recent = (await periodsFor(congregationId)).sort(byWeekDesc).slice(0, 4);
   const referenced = new Set<string>();
   for (const p of recent) {
@@ -101,7 +114,21 @@ export async function countOfficerFaithfulness(congregationId: string): Promise<
     .equals(congregationId)
     .and((o) => o.is_active)
     .toArray();
-  return officers.filter((o) => !referenced.has(o.id)).length;
+  return officers
+    .filter((o) => !referenced.has(o.id))
+    .map((o) => ({
+      id: o.id,
+      officer_code: o.officer_code,
+      first_name: o.first_name,
+      last_name: o.last_name,
+      rank: o.rank,
+      is_interim: o.is_interim === true,
+    }))
+    .sort((a, b) => a.officer_code.localeCompare(b.officer_code));
+}
+
+export async function countOfficerFaithfulness(congregationId: string): Promise<number> {
+  return (await listOfficersWithoutRecentTithe(congregationId)).length;
 }
 
 // ─── KPI 4: Interim officers in use this month ────────────────────────────────

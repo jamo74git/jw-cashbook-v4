@@ -56,6 +56,13 @@ export function canEnterAdmin(role: Role): boolean {
 }
 
 /**
+ * Officer Faithfulness detail page: Chairperson and Elder only, via the matrix.
+ */
+export function canViewOfficerFaithfulness(role: Role): boolean {
+  return hasPermission(role, "dashboard.officer_faithfulness");
+}
+
+/**
  * Where to send a user who lacks access to the route they requested.
  */
 export function redirectTargetFor(role: Role): string {
