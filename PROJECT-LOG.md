@@ -10,7 +10,7 @@
 
 **Repo / branch**
 - Repo: `github.com/jamo74git/jw-cashbook-v4` (also OneDrive-synced).
-- Working branch: `feat/treasurer-dashboard-v1`, HEAD = `72d22367`, pushed to origin.
+- Working branch: `feat/treasurer-dashboard-v1`, pushed tip = `9408e938` (continuity log commit); upstream tracking is set. Later commits may exist, so check `git log`.
 - `main` = `d34a3f51` (older Node build; it is the Vercel **Production** branch).
 - Pre-production. App has NOT launched. First demo: **November 2026**. A full
   functional retest follows the current hardening work.
