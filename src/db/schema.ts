@@ -104,6 +104,7 @@ export interface OfficerLookup {
 export interface CongregationSettings {
   congregation_id: string; // pk
   proof_mandatory: boolean;
+  expense_approval_threshold?: number | null;
   // ── Phase A: treasurer/chair dashboard flags (additive, non-indexed) ────────
   // All optional so existing v2 rows (proof_mandatory only) stay valid; the
   // dashboard repo defaults the flags to false when absent.

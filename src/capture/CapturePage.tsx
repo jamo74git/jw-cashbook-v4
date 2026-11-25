@@ -4,6 +4,7 @@ import { resolveAccess } from "@/lib/routeGuard";
 import { getDashboardRoute } from "@/lib/permissions";
 import { getSession } from "@/services/authService";
 import * as capture from "@/db/captureRepo";
+import { refreshReferenceCache } from "@/utils/cacheLoader";
 import { getOacWeeks, getCurrentOacWeek, isFutureOacService, type OacWeek } from "@/lib/oacWeeks";
 import { periodStatusLabel } from "@/lib/statusLabels";
 import { CashbookForm } from "@/components/CashbookForm";
@@ -68,7 +69,17 @@ export function CapturePage() {
       setBase({ year: initial.year, month: initial.month });
       setWeeks(getOacWeeks(initial.year, initial.month));
       setWeekKey(initial.weekKey);
-      setOfficers(await capture.listOfficers(congregationId));
+      let cachedOfficers = await capture.listOfficers(congregationId);
+      // Empty cache while online: pull reference data once and re-read (never blocks offline use).
+      if (cachedOfficers.length === 0 && (typeof navigator === "undefined" || navigator.onLine)) {
+        try {
+          await refreshReferenceCache();
+          cachedOfficers = await capture.listOfficers(congregationId);
+        } catch {
+          /* keep the empty list; refreshReferenceCache already logs per-query failures */
+        }
+      }
+      setOfficers(cachedOfficers);
       setProofMandatory(await capture.getProofMandatory(congregationId));
       setCtx({ status: "ready", role, congregationId, userId });
     })();
