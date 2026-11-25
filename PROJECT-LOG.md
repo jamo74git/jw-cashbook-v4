@@ -15,6 +15,13 @@
 - Pre-production. App has NOT launched. First demo: **November 2026**. A full
   functional retest follows the current hardening work.
 
+**Vercel Preview URL** (stable branch alias, redeploys on each push):
+https://jw-cashbook-v4-git-feat-treasurer-dashboard-v1-mcom1.vercel.app/
+
+**Demo invitation received (2026-11-23).** The user will NOT demo on seed data. The demo
+needs tested, realistic data, and more features still need building. Scope and date to be
+confirmed with the user. UAT on the Preview is in progress.
+
 **Backend** — dev/demo project `cwdyixafvylzgtpsfmwr` (labelled "PRODUCTION" in the
 dashboard, but that does NOT mean live). Preserve its objects + test data. Do not apply
 schema/policy/bucket changes or deploy unless a task explicitly authorises it.

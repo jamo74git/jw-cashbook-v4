@@ -18,6 +18,12 @@ device as long as this workspace folder is present (via OneDrive sync and/or the
   each entry concise — a handful of lines, not a transcript.
 - Commit it; push when the user allows (git is the real cross-device backup, not OneDrive).
 
+## Share the Vercel link after significant pushes
+- After a successful push of significance that needs user testing, post the Vercel
+  Preview URL for the branch as a plain clickable link in the chat, with a one-line note
+  of what to test. Repeat on every such push. The link is stored in `PROJECT-LOG.md`
+  (CURRENT STATE, "Vercel Preview URL"). If it is not recorded, ask the user once.
+
 ## Keep it small — archive rule
 - When `PROJECT-LOG.md` exceeds ~40 KB or ~12 journal entries, move the OLDEST entries into
   `.kiro/project-log-archive/PROJECT-LOG-<oldest-date>_to_<newest-moved-date>.md` and leave
