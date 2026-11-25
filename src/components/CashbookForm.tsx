@@ -19,6 +19,7 @@ import {
   isFutureDate,
   localTodayISO,
 } from "@/lib/captureTotals";
+import { isAwaitingBankingOnly } from "@/lib/balanceState";
 import { syncPending } from "@/utils/syncEngine";
 import { ProofModal, type ProofResult } from "@/capture/ProofModal";
 import { Button } from "@/components/ui/button";
@@ -204,6 +205,8 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
   const banked = bankedTotal(items);
   const expenses = expensesTotal(items);
   const balanced = isBalanced(items);
+  // Display only: shortfall is exactly the cash not yet marked banked -> amber, not red.
+  const awaitingBanking = !balanced && isAwaitingBankingOnly(items);
   const over500 = monthlyExpensesExceedThreshold(items, R500);
   const missingProofs = proofMandatory ? items.filter((i) => needsProof(i) && !hasProofLocally(i)) : [];
   const eligibleCash = capture.eligibleCashItems(items); // Task 8: cash/burial entries awaiting banking
@@ -625,7 +628,10 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
           <Card className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
             <CardHeader className="pb-2"><CardTitle className="text-sm">Delete line?</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-[11px] text-muted-foreground">This removes the entry from this device's draft. It cannot be undone.</p>
+              <p className="text-[11px] text-muted-foreground">
+                This removes the entry from this device's draft. It cannot be undone.
+                {deleteTarget.proofBlob ? " The attached proof will also be permanently removed." : ""}
+              </p>
               <div className="flex gap-2 justify-end">
                 <Button size="sm" variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
                 <Button size="sm" variant="destructive" onClick={() => void confirmDelete()}>Delete line</Button>
@@ -920,8 +926,8 @@ export function CashbookForm({ period, role, officers, proofMandatory, onChanged
             <div className="flex justify-between border-t pt-1 font-bold"><span>Income</span><span>{money(income)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Banked</span><span>{money(banked)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Expenses</span><span>{money(expenses)}</span></div>
-            <div className={`flex justify-between border-t pt-1 font-bold ${balanced ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-              <span>{balanced ? "Balanced ✓" : "Not balanced"}</span>
+            <div className={`flex justify-between border-t pt-1 font-bold ${balanced ? "text-green-700 dark:text-green-400" : awaitingBanking ? "text-amber-700 dark:text-amber-400" : "text-red-600 dark:text-red-400"}`}>
+              <span>{balanced ? "Balanced ✓" : awaitingBanking ? "Awaiting banking" : "Not balanced"}</span>
               <span>{money(income - banked - expenses)}</span>
             </div>
           </CardContent>
