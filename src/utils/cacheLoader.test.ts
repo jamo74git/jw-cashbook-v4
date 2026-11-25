@@ -66,7 +66,7 @@ describe("refreshReferenceCache", () => {
   it("does not request congregation_settings columns that are absent on the backend", async () => {
     await refreshReferenceCache();
     const s = mock.selects.find((x) => x.table === "congregation_settings");
-    expect(s?.columns).toBe("congregation_id, proof_mandatory, expense_approval_threshold");
+    expect(s?.columns).toBe("congregation_id, proof_mandatory");
     expect(s?.columns).not.toMatch(/hall_capacity|allow_treasurer|last_census_verified_at/);
   });
 

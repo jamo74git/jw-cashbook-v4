@@ -61,7 +61,7 @@ export async function refreshReferenceCache(): Promise<RefreshResult> {
       .select("id, name, code, overseership_id, eldership_id, apostleship_id, district_id"),
     supabase.from("hierarchy_levels").select("id, name, code, level_type, parent_id"),
     // Only columns that exist on the backend (census/hall flags are not provisioned there).
-    supabase.from("congregation_settings").select("congregation_id, proof_mandatory, expense_approval_threshold"),
+    supabase.from("congregation_settings").select("congregation_id, proof_mandatory"),
   ]);
   const tables = ["officers", "congregations", "hierarchy_levels", "congregation_settings"] as const;
 

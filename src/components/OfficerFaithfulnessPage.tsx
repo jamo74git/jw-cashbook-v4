@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { resolveAccess, canViewOfficerFaithfulness, redirectTargetFor } from "@/lib/routeGuard";
 import { getSession } from "@/services/authService";
 import * as capture from "@/db/captureRepo";
 import * as dash from "@/db/dashboardRepo";
+import { listOfficersWithoutRecentTitheLive } from "@/elder/officerFaithfulnessLive";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { Role } from "@/lib/types";
@@ -15,6 +16,8 @@ import type { Role } from "@/lib/types";
  */
 export function OfficerFaithfulnessPage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const congParam = params.get("cong");
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "denied"; target: string }
@@ -31,6 +34,13 @@ export function OfficerFaithfulnessPage() {
         if (!role) return active && setState({ status: "error", message: "No active session." });
         if (!canViewOfficerFaithfulness(role)) {
           return active && setState({ status: "denied", target: redirectTargetFor(role) });
+        }
+        // Elder (no home congregation, online-only portal): read the selected congregation live.
+        const liveCong = !access?.congregation_id && congParam ? congParam : null;
+        if (liveCong) {
+          const live = await listOfficersWithoutRecentTitheLive(liveCong);
+          if (active) setState({ status: "ready", officers: live });
+          return;
         }
         const existing = await capture.listPeriods();
         const congregationId = access?.congregation_id ?? existing[0]?.congregationId ?? null;
@@ -53,13 +63,13 @@ export function OfficerFaithfulnessPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [congParam]);
 
   if (state.status === "denied") return <Navigate to={state.target} replace />;
 
   function goBack() {
     if (window.history.length > 1) navigate(-1);
-    else navigate("/dashboard");
+    else navigate(congParam ? "/elder" : "/dashboard");
   }
 
   return (

@@ -21,7 +21,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createClient } from "@/lib/supabase/client";
-import { getUserAccess, hasPermission, logAuditAction } from "@/lib/permissions";
+import { getUserAccess, hasPermission, logAuditAction, OFFICER_FAITHFULNESS_VIEW } from "@/lib/permissions";
 import { useOnlineStatus } from "@/lib/useOnlineStatus";
 import { getOacWeeks } from "@/lib/oacWeeks";
 import { sectionTotals, type CaptureItem, type ItemType } from "@/lib/captureTotals";
@@ -459,6 +459,24 @@ export function ElderDashboard() {
         <Card><CardContent className="py-6"><p className="text-sm text-muted-foreground">No congregations are assigned to your eldership. Nothing to review.</p></CardContent></Card>
       ) : (
         <>
+          {/* Officer Faithfulness: matrix-gated link to the detail page (one congregation at a time). */}
+          {hasPermission(role, OFFICER_FAITHFULNESS_VIEW) && (() => {
+            const faithCong = scope !== "all" ? scope : congregations.length === 1 ? congregations[0].id : null;
+            return (
+              <Card
+                {...(faithCong ? { role: "button", tabIndex: 0, onClick: () => navigate(`/dashboard/officer-faithfulness?cong=${faithCong}`), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(`/dashboard/officer-faithfulness?cong=${faithCong}`); } } } : {})}
+                className={faithCong ? "cursor-pointer hover:bg-muted/40 max-w-sm" : "max-w-sm"}
+              >
+                <CardContent className="py-3">
+                  <h3 className="text-sm font-bold">Officer Faithfulness</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {faithCong ? "Priests and underdeacons with no tithe in the last 4 periods. Select to view." : "Select a congregation above to view officers with no tithe in the last 4 periods."}
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })()}
+
           {/* Tabs */}
           <div className="flex gap-1 border-b">
             {TABS.map((t) => (
