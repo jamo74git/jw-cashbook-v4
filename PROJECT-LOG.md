@@ -70,7 +70,21 @@ launch decision (see Open items).
 uncommitted change — leave it untouched. Baselines: vitest ~224 pass; lint = 1 pre-existing
 error (`_params` unused in `captureRepo.ts`) + 6 warnings; typecheck 0.
 
+**Specs authored, NOT built, migrations NOT applied (2026-11-24; awaiting user decisions)**
+- `.kiro/specs/expense-payment-source` — cash vs officer pre-paid expenses, Invoice No.,
+  forced expense proof, cash balance rule. Open decisions D1-D17 (design.md section 21);
+  D8 must be answered first (decides whether `20261124095000_payment_type_cashbanked.sql`
+  stands alone).
+- `.kiro/specs/burial-notice-and-trend` — DHO burial notices (scope + expiry), burial proof
+  exemption, 12-month burial trend vs prior year, Chairperson faithfulness page. Open
+  decisions O1-O16 (design.md section 17).
+- Authored migrations (unapplied; disposable stack/RLS gate first):
+  `20261124095000_payment_type_cashbanked`, `20261124100000_expense_payment_source`,
+  `20261124110000_burial_notice`, `20261124120000_burial_proof_exempt`,
+  `20261124130000_burial_monthly_totals`.
+
 **Open items to carry forward**
+- Answer the spec open decisions above (expense-payment-source D1-D17; burial-notice-and-trend O1-O16).
 - Production `proof_mandatory` default decision (currently demo = false).
 - Enable Supabase leaked-password protection before launch (currently off).
 - `get_week_number` function has mutable search_path (pre-existing WARN).
@@ -81,6 +95,11 @@ error (`_params` unused in `captureRepo.ts`) + 6 warnings; typecheck 0.
 ---
 
 ## SESSION JOURNAL  (newest first)
+
+### 2026-11-24
+- Authored two specs (requirements/design/tasks) from UAT feedback: `expense-payment-source`
+  and `burial-notice-and-trend`, plus five unapplied migration files. No code, no backend
+  change, no push. Next: user answers open decisions, then build on a disposable stack.
 
 ### 2026-11-23
 - Established cross-device continuity: added `.kiro/steering/project-continuity.md`
