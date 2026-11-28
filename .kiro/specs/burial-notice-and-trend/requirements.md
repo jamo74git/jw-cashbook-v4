@@ -242,9 +242,9 @@ the caller's user id, an active, in-window HO access row plus the district assig
 Function cannot widen access.
 6.4 **Every role reads notices, the Secretary included (RD1).** An authenticated user, whatever the role, shall be able to
 SELECT only active notices of their own district. "Own district" means the notice's district contains a congregation that
-the user's access covers: through `get_my_hierarchy_ids()`, or through any active, in-window `user_hierarchy_access` row
+the user's access covers: through `get_my_hierarchy_ids()`, or through any non-HO active, in-window `user_hierarchy_access` row
 whose `congregation_id` is the congregation or whose `hierarchy_id` is the congregation's hierarchy, eldership,
-overseership, apostleship or district id; or the user is an HO assigned to that district. The rule is one shared SQL function
+overseership, apostleship or district id; or the user is an HO assigned to that district (an HO access row without the `ho_district_assignments` row admits nothing, steering invariant 3). The rule is one shared SQL function
 (`scope_district_readable`) with no role term, and the expense category configuration of Spec 1 uses the same function.
 Anonymous users shall read nothing. Whether the district scoping itself stays (versus "every authenticated user reads every
 notice") is Open Decision O3; the resolved decision is only that no ROLE is excluded.

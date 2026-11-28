@@ -116,6 +116,9 @@ error (`_params` unused in `captureRepo.ts`) + 6 warnings; typecheck 0.
   `20261124110000_scope_notice.sql` (renamed) and updated `20261124130000_burial_monthly_totals.sql`. Fixed the 5 NITs of the
   previous review. Read-only SELECTs on the dev/demo backend established the Elder and Secretary row shapes.
 - Open decisions: D1-D21, O1-O18 (see CURRENT STATE); next: user answers (D8 first, then D18 with O1), then build on a disposable stack.
+- Rev2 review fixes (docs and unapplied SQL only): the shared read rule `scope_district_readable` branch (c) now excludes role HO, so an HO
+  with no `ho_district_assignments` row reads no notices or category rows (invariant 3); SQL test cases 7b/7c and 5b added; Spec 1 design
+  section 30 index now lists the appendix order. Still open: D18 (REPLACE vs MERGE category lists, recommend REPLACE) and O1 (notice precedence, recommend show all, max 3).
 
 ### 2026-11-24
 - Authored two specs (requirements/design/tasks) from UAT feedback: `expense-payment-source`

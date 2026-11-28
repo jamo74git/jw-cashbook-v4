@@ -275,9 +275,9 @@ create policy scope_notice_select on public.scope_notice
   for select to authenticated
   using (is_active and public.scope_district_readable(district_id));
 -- scope_district_readable(d) is true when d contains a congregation covered by the caller through
---   (a) get_my_hierarchy_ids(), or (b) an HO assignment to d, or (c) any active in-window user_hierarchy_access
+--   (a) get_my_hierarchy_ids(), or (b) an HO assignment to d, or (c) any NON-HO active in-window user_hierarchy_access
 --   row whose congregation_id is that congregation or whose hierarchy_id is the congregation's hierarchy, eldership,
---   overseership, apostleship or district id. Branch (c) is what admits an Elder (Eldership row) and a Secretary
+--   overseership, apostleship or district id. Branch (c) excludes role HO (an HO is admitted only by branch (b), which checks the assignment, so an unassigned HO reads nothing). Branch (c) is what admits an Elder (Eldership row) and a Secretary
 --   without depending on get_my_hierarchy_ids() role coverage.
 ```
 
@@ -729,8 +729,8 @@ export async function getFaithfulnessHistory(congregationId: string, window: 4 |
 - Periods: `periodsFor(congregationId)` sorted by `byWeekDesc`, take 4 or up to 26 ("all"; `capped` true when more exist).
 - For each period: `lineItemsForPeriod`, collect `officer_id` set `R(p)`.
 - Officers: the active cached officers (same query as `listOfficersWithoutRecentTithe`).
-- Per period: `tithed = |active ∩ R(p)|`, `notTithed = |active| - tithed`. Per officer: `missed = count of periods where
-  officer ∉ R(p)`, `of = number of periods`.
+- Per period: `tithed = |active âˆ© R(p)|`, `notTithed = |active| - tithed`. Per officer: `missed = count of periods where
+  officer âˆ‰ R(p)`, `of = number of periods`.
 - Period label: `oacServiceDateLabel(year, month, week)` plus `AM`/`PM` (existing helper, F16 context).
 - Pure core `buildFaithfulness(officers, periodRefs)` in `src/lib/faithfulness.ts` so both the Dexie and the live paths
   share it.
@@ -948,6 +948,7 @@ Integration (disposable stack; SQL tests in `supabase/tests/scope_notice_rls.tes
    Non-overlapping range: no conflict. Different node or level: no conflict.
 7. SELECT policy: a Treasurer in district A reads district A notices and none from B; retired rows invisible.
 7b. Read rule for every role (RD1): an Elder (Eldership row, `congregation_id` NULL), a Secretary, an Auditor and a Chairperson in district A each read district A's active notices of both types and none of district B's; a Secretary row is created for the test because none exists in the dev/demo data (F27). Asserted, not merely recorded: the shared function `scope_district_readable` must admit the Elder and the Secretary through branch (c) even if `get_my_hierarchy_ids()` does not cover them.
+7c. Invariant 3 (finding rev2-1): an HO access row for district A with NO `ho_district_assignments` row reads zero `scope_notice` rows and zero `expense_category_config` rows; the same HO with the assignment reads district A's rows.
 8. `burial_monthly_totals`: `period_ids` lists exactly the periods whose lines make up `total`; returns sums by `section = 'Burial'` including banked lines (`item_type = 'CashBanked'`); excludes
    Draft and Rejected; a caller without a Treasurer, Chairperson or qualifying Elder row at that congregation gets no rows (cases 8c, 8e); an
    Auditor gets no rows; a Secretary gets no rows.

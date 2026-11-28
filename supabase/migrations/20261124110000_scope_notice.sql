@@ -80,7 +80,8 @@ create index if not exists scope_notice_district_idx
 --    all district based:
 --      a. get_my_hierarchy_ids() congregations (existing pattern, verified to return congregation ids);
 --      b. the HO assigned to the district;
---      c. any active, in-window access row that covers a congregation of the district: the row's
+--      c. any NON-HO active, in-window access row (an HO row with no assignment must see nothing,
+--         steering invariant 3) that covers a congregation of the district: the row's
 --         congregation_id equals the congregation, or its hierarchy_id equals the congregation's
 --         hierarchy, eldership, overseership, apostleship or district id. This is what lets an Elder
 --         (Eldership row) and a Secretary read without depending on get_my_hierarchy_ids() coverage.
@@ -103,6 +104,7 @@ language sql stable security definer set search_path to '' as $$
             and u.status = 'active'
             and u.start_date <= now()
             and (u.end_date is null or u.end_date >= now())
+            and u.role <> 'HO'   -- HO is admitted by branch (b) only, which checks ho_district_assignments
             and (u.congregation_id = c.id
                  or u.hierarchy_id in (c.hierarchy_id, c.eldership_id, c.overseership_id,
                                        c.apostleship_id, c.district_id)))
@@ -351,6 +353,8 @@ grant execute on function public.scope_notice_retire(uuid,uuid) to service_role;
 --     not conflict; an edit that changes the type raises 22023.
 --  7. Read rule: a Secretary, an Elder (Eldership row), a Treasurer, an Auditor in the district each read
 --     the active notice; a user of another district reads none; retired rows are invisible.
+--  7b. An HO access row for district D with NO ho_district_assignments row reads zero scope_notice rows
+--      and zero expense_category_config rows (invariant 3); with the assignment it reads them.
 --  8. Create-date boundary: expires_on = current_date - 1 accepted, current_date - 2 rejected (22023).
 -- END - NOT APPLIED.
 -- ============================================================================

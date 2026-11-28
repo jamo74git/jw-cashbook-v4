@@ -953,4 +953,4 @@ Source of the NITs: `.agents/tasks/specs-expense-burial-2026-11/review.md` (APPR
 
 ## 30. Index of response sections
 
-23 (review round 2), 24 (round 3), 25 (round 4), 26 (round 5), then 27 to 29 (revision 6). Ascending by number. Section 29 is the newest.
+23 (review round 2), 24 (round 3), 25 (round 4), 26 (round 5), then 27 to 29 (revision 6). Ascending by number. Section 29 is the newest. Appendices follow the sections in file order: Appendix C (category resolution vectors, section 27) first, then Appendix A (golden balance vectors, section 5.4); the letters were assigned in the order the appendices were first needed, and each is referenced by its letter.

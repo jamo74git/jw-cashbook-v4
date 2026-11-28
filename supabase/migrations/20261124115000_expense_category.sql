@@ -207,6 +207,7 @@ grant execute on function public.expense_category_clear(uuid,text,uuid) to servi
 --     the actor's assignments raises 42501; a non-HO raises 42501.
 --  5. Read: a Treasurer, an Elder (Eldership row), a Secretary and an Auditor in the district read the
 --     active rows; a user of another district reads none; retired rows are invisible.
+--  5b. An HO access row with NO ho_district_assignments row reads zero rows here and in scope_notice (read rule branch (c) excludes HO).
 --  6. Concurrent publishes at one scope serialise (advisory lock): final state is exactly one list.
 -- END - NOT APPLIED.
 -- ============================================================================
