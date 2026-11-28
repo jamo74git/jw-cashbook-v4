@@ -1,7 +1,7 @@
 # Requirements Document: Burial Notice, Burial Proof Exemption, Burial Trend and Officer Faithfulness Chart
 
-Spec 2 of the expense/burial track. Status: DRAFT for user approval, revised 2026-11-26 after design review (CHANGES_REQUESTED, findings 1, 2, 4, 7-10 for this spec).
-Branch `feat/treasurer-dashboard-v1`. Documentation only: no code, no migration applied, no backend write, no commit.
+Spec 2 of the expense/burial track. Status: DRAFT for user approval, revision 3, 2026-11-27: revised after design review rounds 1 and 2 (design section 19) and after the user's additions of 2026-11-27 (generalised notice mechanism with a notice type key, Expenses notice, Elder sees the trend, all roles read notices; design section 19.5).
+Branch `feat/treasurer-dashboard-v1`. Documentation only: no code, no migration applied, no backend write. Document changes are committed locally and not pushed.
 Fact base: `.agents/tasks/uat-treasurer-findings-2026-11-23.md` (sections 5, 7, 8, 9, 10, 11) plus the code and
 migration reads cited in `design.md`. Anything not verified is marked **[UNVERIFIED]**.
 
@@ -17,15 +17,37 @@ Treasurer UAT (2026-11-23) asked for four things, all delivered by this spec:
 4. An upgrade to the Officer Faithfulness detail page: a tithed-versus-not-tithed chart per period, and a per-officer
    count of missed periods.
 
+5. (Added 2026-11-27.) The notice in item 1 is built as ONE generalised mechanism with a **notice type** key. Two types
+   exist: **Burial** (item 1) and **Expenses** (a message above the expense capture line, requested for the Expenses
+   tab of Spec 1 `expense-payment-source`). One table, one publish and one retire function, one Edge action pair, one HO
+   edit screen, one Dexie store and one display component serve both types. This spec owns the mechanism; Spec 1 only
+   consumes it (requirement 11).
+
 The Burial function may be retired once members all pay electronically, so items 1 and 3 are deliberately small.
 Item 3 and item 4 share one chart component.
+
+## Resolved decisions (user, 2026-11-27)
+
+- RD1. **All roles read notices, Secretary included.** There is no role term in the read rule. See 6.4 and 3.9.
+- RD2. **The Elder also sees the Burial trend**, totals only, no line detail. See 8.3 and 8.8.
+- RD3. The Expenses notice follows exactly the same process as the Burial notice (requirement 11).
+- RD4. There is no per-line free-text Notes column on expenses; the Expenses notice replaces that idea (Spec 1 requirement 11).
+
+Still open (design section 17): O1, the rule when notices at several scope levels are active together, applies to each
+notice type independently and stays open; its build default is unchanged.
 
 ## Glossary
 
 - **DHO**: a user with role `HO` whose access is scoped to one or more districts (`user_hierarchy_access` role `HO`,
   scope `District`, plus a matching `ho_district_assignments` row). There is no separate DHO role in `ROLES`
   (`src/lib/types.ts`).
-- **Burial notice**: a text message, with a scope, a start date and an optional expiry date, shown on the Burial tab.
+- **Notice**: a text message with a notice type, a scope, a start date and an optional expiry date. Stored in one table
+  (`scope_notice`).
+- **Notice type**: the key that says where a notice is shown. Exactly two values: `Burial` (shown on the Burial tab, above
+  the capture bar) and `Expenses` (shown on the Expenses tab, above the expense capture line). Notices of different types
+  never conflict, never replace each other and are resolved separately.
+- **Burial notice**: a notice of type `Burial`. **Expenses notice**: a notice of type `Expenses`. Everything this
+  document says about "a notice" applies to both types unless it names one.
 - **Scope**: the part of the hierarchy a notice applies to. One of `District` (every congregation in the district),
   `Apostleship` (every congregation under that apostleship) or `Overseership` (every congregation under that
   overseership).
@@ -36,9 +58,10 @@ Item 3 and item 4 share one chart component.
   not all) apostleships needs one notice per apostleship; there is no multi-select scope.
 - **Active notice**: `is_active` is true and today's date lies in `[starts_on, expires_on]` (open-ended when
   `expires_on` is null).
-- **Conflict**: an existing non-retired notice with the same scope level and scope id whose date range overlaps the
-  new notice's date range.
-- **Default notice**: the built-in text shown when no active notice applies to the congregation.
+- **Conflict**: an existing non-retired notice of the same notice type, with the same scope level and scope id, whose date
+  range overlaps the new notice's date range.
+- **Default notice**: the built-in text of a notice type, shown when no active notice of that type applies to the
+  congregation (one default per type, requirements 4 and 11.5).
 - **Trend window**: by default the 12 OAC months ending with the current OAC month (the user asked for "the last calendar year"; trailing 12 months versus January to December of the last full year is part of Open Decision O4). The prior-year window is the same 12
   (year-1, month) pairs. "OAC month" is `cashbook_period.year` and `cashbook_period.month`, the same month key the
   rest of the app uses (`src/lib/oacWeeks.ts`).
@@ -59,30 +82,33 @@ Item 3 and item 4 share one chart component.
 - A5. The trend counts periods that have left the editable states (status not `Draft` and not `Rejected`) from the
   server, plus this device's own periods from Dexie that the server result does not list (requirement 8.4).
 - A6. Faithfulness charts use the officers who are active today, applied to each historical period.
-- A7. Spec 1 (`expense-payment-source`) lands before or with this spec. Both change the proof rules and the Dexie
-  version, so implementation order is fixed in `tasks.md`.
+- A7. Spec 1 (`expense-payment-source`) and this spec share files and the Dexie version, and Spec 1 consumes this spec's
+  notice mechanism (Expenses notice) and its scope helpers (expense categories). The interleaved implementation order is
+  fixed in `tasks.md` of both specs.
 
 ## Requirements
 
-### Requirement 1: HO publishes a Burial notice
+### Requirement 1: HO publishes a notice (Burial or Expenses)
 
 **User Story:** As a DHO, I publish a message for my congregations, with the dates it should show, so members see AGM
-dates, annual increases and payment instructions where they pay Burial.
+dates, annual increases and payment instructions where they pay Burial, and guidance on how to record expenses.
 
 #### Acceptance Criteria
 
-1.1 A user with role `HO` shall be able to create a notice with: scope level (District, Apostleship or Overseership),
-the scope node, message text, a start date, and an expiry date.
+1.1 A user with role `HO` shall be able to create a notice with: notice type (`Burial` or `Expenses`), scope level
+(District, Apostleship or Overseership), the scope node, message text, a start date, and an expiry date. The notice type
+is required, is one of exactly those two values, and cannot be changed on an edit (a changed type is rejected with 400).
 1.2 The message text shall be required, trimmed, and between 1 and 1000 characters after trimming. The trim set is space, tab,
 carriage return and line feed (Postgres `btrim(text)` trims spaces only, so the explicit set is required). Empty, whitespace-only
 (including newline-only and tab-only), longer than 1000 characters, and containing a control character other than tab, CR and LF
 shall be rejected with a 400 response and no row written. The trimmed string is what is forwarded and stored. The rule is
-enforced in the Edge validator, in `burial_notice_publish` and in the table CHECK constraints.
-1.3 On creation, the expiry date (when given) shall be on or after the start date and on or after today. A rejected
-date pair shall write nothing. "Today" in this server rule is `current_date - 1` in Postgres (UTC): the server rule is
-deliberately lenient by one day so the device's local date (used for display, 3.6) and the server's UTC date can never
-reject a notice that expires "today" on the device. The strict "not in the past" check is the client form's, using the
-device date.
+enforced in the Edge validator, in `scope_notice_publish` and in the table CHECK constraints.
+1.3 On creation, the expiry date (when given) shall be on or after the start date, and on or after **yesterday's UTC date**
+(the server rule, `p_expires_on >= current_date - 1`). The server is deliberately lenient by one day so the device's local
+date (used for display, 3.6) and the server's UTC date can never reject a notice that expires "today" on the device. The
+client form is stricter: it requires the device's date, today or later. Boundary cases (test T4): an expiry of UTC yesterday is
+accepted; an expiry of the UTC day before yesterday is rejected with 22023 and nothing is written. A rejected date pair
+shall write nothing.
 1.4a A scope node that does not exist, whose `level_type` differs from the chosen scope level, or whose `parent_id` chain
 does not reach a District by the fixed shape (Apostleship under District, Overseership under Apostleship) shall be
 rejected with 400 and shall write nothing.
@@ -101,7 +127,8 @@ edited notice itself. Replace on an edit retires the other conflicting notices a
 1.7 Retiring or replacing a notice shall keep the row (`is_active` false, `retired_at`, `retired_by`). No notice row
 is physically deleted by the application.
 1.8 A notice shall record `created_by`, `updated_by`, `created_at` and `updated_at`.
-1.9 The HO screen shall show the HO's current and future notices with scope name, dates and text, and shall be
+1.9 One HO screen serves both notice types (a notice type selector at the top of the form and a type badge on each
+row). It shall show the HO's current and future notices with notice type, scope name, dates and text, and shall be
 unavailable (explicit offline message, no data) while the device is offline. Notices whose `expires_on` is before today
 (still `is_active`, because nothing retires them automatically) shall be hidden by a client date filter, with a
 "Show expired" toggle that lists them badged "Expired".
@@ -122,7 +149,8 @@ Replace, Keep both and Cancel.
 step fails, neither shall persist.
 2.4 On Keep both, the server shall insert the new notice and leave the older ones active.
 2.5 On Cancel, nothing shall be written.
-2.6 Notices at different scope levels or different scope nodes shall never be reported as conflicts of each other.
+2.6 Notices of different notice types, at different scope levels or at different scope nodes shall never be reported as
+conflicts of each other. A Burial notice and an Expenses notice for the same scope and dates coexist.
 2.7 A notice whose date range does not overlap an existing notice's range (for example a scheduled future message)
 shall not be reported as a conflict.
 
@@ -132,9 +160,10 @@ shall not be reported as a conflict.
 
 #### Acceptance Criteria
 
-3.1 When the Burial tab is active, the notice area shall render below the tab button row and above the capture bar
-in `CashbookForm`, whether or not the user may edit (`canEdit`). It shall not render on other tabs.
-3.2 The area shall show the active notices that apply to the period's congregation: District notices for its
+3.1 When the Burial tab is active, the Burial notice area shall render below the tab button row and above the capture bar
+in `CashbookForm`, whether or not the user may edit (`canEdit`). It shall not render on other tabs. (The Expenses tab
+has its own notice area of type `Expenses`, requirement 11.)
+3.2 The area shall show the active notices of its notice type that apply to the period's congregation: District notices for its
 `district_id`, Apostleship notices for its `apostleship_id`, Overseership notices for its `overseership_id`.
 3.3 When more than one notice applies, the order and number shown shall follow the resolution rule chosen in Open
 Decision O1. Until O1 is answered, the build default is: all applicable notices, most specific scope first, at most 3.
@@ -146,15 +175,25 @@ expired notice shall never show, including when it is still present in the offli
 3.7 The notice area shall show its scope label ("District", "Apostleship" or "Overseership") and, when set, "until
 <expires_on>".
 3.8 Elder on the capture Burial tab. An Elder enters capture (`capture.create` is `O`, `canEnterCapture` is true) and
-therefore sees the notice area. The notice area for an Elder shows the notices that the Elder's offline cache holds, which
-depend on what `refreshReferenceCache` could read under RLS for that Elder; when none is cached (or the table or policy
-yields nothing for that Elder) it shows the Default notice. Behaviour shall be the same code path as for the Treasurer, with
-no Elder-specific branch and no error shown. Whether RLS returns the district's notices to an Elder is [UNVERIFIED]
-(design 4.1, integration case 7b). No trend is shown to an Elder (8.3, 8.8).
+therefore sees the notice area. The notice area for an Elder shows the notices that the Elder's offline cache holds. The read
+rule (6.4) admits an Elder through the Elder's Eldership access row (verified read-only 2026-11-27: the row has
+`scope_level = 'Eldership'` and `hierarchy_id` equal to the congregation's `eldership_id`); when none is cached (or the
+table or policy yields nothing) it shows the Default notice. Behaviour shall be the same code path as for the Treasurer, with
+no Elder-specific branch and no error shown. That the policy returns the district's notices to an Elder is [UNVERIFIED] until
+integration case 7 runs on a stack. The Elder also sees the Burial trend (8.3, 8.8; resolved decision RD2).
+3.9 Secretary. The Secretary cannot enter capture (`canEnterCapture`), so the capture tabs never show it a notice. Resolved
+decision RD1 (2026-11-27) says the Secretary reads notices too. The read rule (6.4) therefore has no role term, and the
+Secretary's reports screen (`SecretaryReview.tsx`) shall show a read-only "Notices" panel for the congregation being
+viewed, listing the active Burial and Expenses notices that apply to it (same resolver, same Default notices, text only). The
+panel is a totals-compatible surface: it carries no line detail, no proof and no amounts (steering invariant 7). The exact
+placement inside `SecretaryReview.tsx` is [UNVERIFIED] (the file has not been read for this spec); task T7b reads it first.
+Other read-only roles (Auditor, Overseer, Apostle, HO) may read notices under the same rule but no new screen is added for
+them (Open Decision O17).
 
-### Requirement 4: Default notice
+### Requirement 4: Default Burial notice
 
-**User Story:** As a member, when my DHO has posted nothing, I still see the basic burial payment rules.
+**User Story:** As a member, when my DHO has posted nothing, I still see the basic burial payment rules. (The Expenses type has
+its own default, requirement 11.5.)
 
 #### Acceptance Criteria
 
@@ -173,16 +212,17 @@ distinguishable from a DHO message.
 
 #### Acceptance Criteria
 
-5.1 The notices readable by the signed-in user shall be cached in a new Dexie store `burialNotices` through an
-additive Dexie version (no existing store altered, no upgrade function).
+5.1 The notices of both types readable by the signed-in user shall be cached in one new Dexie store `scopeNotices`
+(index `id, notice_type, district_id, scope_id`) through an additive Dexie version (no existing store altered, no upgrade
+function). Each cached row carries its `notice_type`.
 5.2 `refreshReferenceCache` shall fetch notices in the same `Promise.allSettled` pass. A failed notice query shall
 leave the existing cached notices untouched and shall not stop the other stores refreshing.
-5.3 The Burial tab shall also trigger a notice-only refresh when it mounts while online, so a notice published after
-the last login appears without a full re-login.
-5.4 If the `burial_notice` table does not exist on the backend yet, the app shall still work: the notice query error
-is logged once as a warning and the Default notice shows.
+5.3 The Burial tab and the Expenses tab shall each trigger a notice-only refresh when they mount while online, so a notice
+published after the last login appears without a full re-login.
+5.4 If the `scope_notice` table does not exist on the backend yet, the app shall still work: the notice query error
+is logged once as a warning and the Default notice of each type shows.
 5.5 Accepted staleness: a cached notice that the server has since retired or corrected stays visible offline until the
-next successful refresh, which happens at the next online login or the next Burial tab mount while online. There is no
+next successful refresh, which happens at the next online login or the next Burial or Expenses tab mount while online. There is no
 other maximum age. An expired notice never shows regardless of cache age (3.6).
 
 ### Requirement 6: Notice read and write access control
@@ -192,7 +232,7 @@ people who should see them.
 
 #### Acceptance Criteria
 
-6.1 The browser client shall have no INSERT, UPDATE or DELETE privilege or policy on `burial_notice`. Writes shall be
+6.1 The browser client shall have no INSERT, UPDATE or DELETE privilege or policy on `scope_notice`. Writes shall be
 possible only through the `admin-write` Edge Function.
 6.2 The new `admin-write` actions shall follow the Privileged Route Checklist order: service-role key present (500),
 Bearer token (401), `auth.getUser` (401), active `user_hierarchy_access` role `HO` (403), validate body (400), write
@@ -200,10 +240,15 @@ with the service-role client.
 6.3 The write itself shall run in one SQL function callable only by `service_role`. That function shall re-check, from
 the caller's user id, an active, in-window HO access row plus the district assignment, so a gate gap in the Edge
 Function cannot widen access.
-6.4 An authenticated user shall be able to SELECT only active notices for their own district (members of the district
-by `get_my_hierarchy_ids()`, or an HO assigned to that district). Anonymous users shall read nothing. See Open
-Decision O3.
-6.5 `burial.notice_manage` shall be a permission-matrix row with `HO: "M"` and `-` for every other role. The HO screen
+6.4 **Every role reads notices, the Secretary included (RD1).** An authenticated user, whatever the role, shall be able to
+SELECT only active notices of their own district. "Own district" means the notice's district contains a congregation that
+the user's access covers: through `get_my_hierarchy_ids()`, or through any active, in-window `user_hierarchy_access` row
+whose `congregation_id` is the congregation or whose `hierarchy_id` is the congregation's hierarchy, eldership,
+overseership, apostleship or district id; or the user is an HO assigned to that district. The rule is one shared SQL function
+(`scope_district_readable`) with no role term, and the expense category configuration of Spec 1 uses the same function.
+Anonymous users shall read nothing. Whether the district scoping itself stays (versus "every authenticated user reads every
+notice") is Open Decision O3; the resolved decision is only that no ROLE is excluded.
+6.5 `notice.manage` shall be a permission-matrix row with `HO: "M"` and `-` for every other role. The HO screen
 and its navigation entry shall be gated through `permissions.ts` (`hasPermission`). No role string comparison shall
 appear in a page or component.
 
@@ -241,15 +286,17 @@ proof-required; a line with `section: "Members"` and `item_type: "EFT"` shall be
 
 8.1 When the Burial tab is active, a chart shall show, for each month of the trend window, the Burial amount for that
 month and for the same month of the prior year (two series, 12 categories).
-8.2 Prior-year values shall come from the server through an RPC that returns, per month, `(year, month, total, period_ids)`,
+8.2 Prior-year values shall come from the server through an RPC that returns, per month, `(yr, mo, total, period_ids)`,
 where `period_ids` lists the ids of the periods that make up `total`. No line item, receipt number or proof shall be
 returned.
-8.3 The RPC shall return rows only when the caller holds ONE active, in-window `user_hierarchy_access` row whose
-`congregation_id` equals the requested congregation and whose role is Treasurer or Chairperson (the same
-role-and-congregation-on-one-row pattern as Tranche 4, `20261105130000_tranche4_proof_access.sql` lines 270 and 296).
-Elder is deliberately not in the list (8.8).
-A role held at another congregation, or a different role at this one (for example Auditor), shall not authorise
-the read. A caller with no congregation-scoped row shall receive no rows.
+8.3 The RPC shall return rows only when the caller holds ONE active, in-window `user_hierarchy_access` row that is either
+(a) a Treasurer, Chairperson or Elder row whose `congregation_id` equals the requested congregation (the same
+role-and-congregation-on-one-row pattern as Tranche 4, `20261105130000_tranche4_proof_access.sql` lines 270 and 296), or (b)
+an Elder row with `scope_level = 'Eldership'` whose `hierarchy_id` equals that congregation's `eldership_id`. Branch (b)
+is the one that applies to a real Elder: verified read-only on the dev/demo backend (2026-11-27), the Elder access row has
+`congregation_id` NULL and `hierarchy_id` equal to `congregations.eldership_id`. A role held at another congregation or
+eldership, or a different role at this one (for example Auditor or Secretary), shall not authorise the read. A caller with no
+qualifying row shall receive no rows.
 8.4 Periods with status `Draft` or `Rejected` shall be excluded from server totals. This device's own periods shall be
 added from Dexie, keyed on `section = 'Burial'`, for every local period whose `serverId` is null or is NOT listed in the
 `period_ids` of the server result in use (fresh or cached). A local period whose `serverId` is listed is skipped
@@ -265,15 +312,16 @@ and prior-year window are zero, the chart shall be replaced by one line of text.
 needs a connection".
 8.7 A trend read failure (network, RPC missing, not permitted) shall never block capture, never show an error toast,
 and shall show a short inline note.
-8.8 The trend shall use no more than 24 numbers and no line detail. The trend renders only on the capture Burial tab,
-which a Secretary cannot enter (`canEnterCapture`: Elder, Chairperson, Treasurer). Decision (review finding 2, option
-a): the trend is for Treasurer and Chairperson, the two roles that hold a congregation-scoped access row. The matrix row
-`burial.trend_view` grants V to Treasurer and Chairperson and `-` to every other role (Elder, Secretary, HO, Auditor,
-Overseer, Apostle), and the RPC lists only those two roles. An Elder, who does enter capture but typically has no
-congregation-scoped access row, therefore sees no trend and no trend placeholder, and sees the notice area as in 3.8. A
-Secretary Burial totals block and an Elder trend are out of scope (Open Decision O13).
-8.8b Acceptance: for an Elder (`burial.trend_view` is `-`), the `BurialTrend` component renders nothing and makes no RPC
-call; the Burial tab still shows the notice area (3.8) and the capture bar.
+8.8 The trend shall use no more than 24 numbers and no line detail (totals only). The trend renders only on the capture Burial
+tab, which a Secretary cannot enter (`canEnterCapture`: Elder, Chairperson, Treasurer). **Resolved decision RD2 (2026-11-27):
+the Elder also sees the trend.** The matrix row `burial.trend_view` grants V to Elder, Chairperson and Treasurer and `-` to
+every other role (Secretary, HO, Auditor, Overseer, Apostle), and the RPC lists the same three roles (8.3). The Elder's access
+row is Eldership-scoped, which is why the RPC has the extra branch (b) in 8.3. The Secretary has no trend surface (it reads
+notices, 3.9); a Secretary Burial totals block stays out of scope (Open Decision O13).
+8.8b Acceptance: for a role whose `burial.trend_view` is `-`, the `BurialTrend` component renders nothing and makes no
+RPC call. For an Elder, `BurialTrend` renders the same chart as for a Treasurer, from the same RPC, with totals only (no
+receipt number, no proof, no line item). If the RPC returns no rows for an Elder (for example an Elder whose Eldership row
+does not cover this congregation), the component hides the chart and shows nothing else, as in 8.4a.
 8.9 The chart shall have an accessible text alternative: a visually hidden table of the same values and an `aria-label`
 on the figure.
 8.10 The chart component shall be the same component used by Requirement 9.
@@ -329,6 +377,36 @@ spec, in any test, or in any seed script.
 10.4 Baselines hold after every task: `tsc --noEmit` 0 errors; vitest all passing; lint no new errors (1 known error, 6
 known warnings); `vite build` passes.
 
+### Requirement 11: Expenses notice (the second notice type)
+
+**User Story:** As a DHO, I publish guidance about expenses (what is claimable, how to record a pre-paid expense, how to
+name an invoice) that every Treasurer sees directly above the expense capture line. This replaces the idea of a free-text
+Notes column on each expense line (resolved decision RD4).
+
+#### Acceptance Criteria
+
+11.1 The Expenses notice is the same record, the same table and the same process as the Burial notice, with notice type
+`Expenses`: scope District, Apostleship or Overseership; start date and optional expiry date; the same message rules (1.2);
+the same overwrite prompt at the same type and scope (requirement 2); the same retire and edit rules (1.6, 1.7); the same
+`admin-write` path and Privileged Route Checklist gate (6.2, 6.3); the same offline Dexie cache (requirement 5); the same
+read rule for every role (6.4). No second table, no second HO screen, no second Edge action pair.
+11.2 The Expenses tab shall render the Expenses notice area below the tab button row and above the expense capture bar in
+`CashbookForm`, whether or not the user may edit (`canEdit`). It shall not render on other tabs. The Burial and Expenses areas
+never appear together.
+11.3 The area shall show the active `Expenses` notices that apply to the period's congregation, resolved by the same pure
+function and the same rule as the Burial notice (3.2, 3.3 and Open Decision O1, which applies to each type independently),
+with the same scope label and "until <date>" text (3.7), rendered as text (3.5) and judged by the device date (3.6).
+11.4 When no `Expenses` notice is active, the Default Expenses notice shall show, labelled "Standard notice" (4.3). It works
+offline and with an empty cache.
+11.5 The Default Expenses notice shall say, in paraphrase: record each expense on its own line; choose how it was paid and
+pick a category; attach the invoice for every expense; if an officer paid from his own pocket, record it as pre-paid by that
+officer and name him. Its text comes from one constant (`EXPENSES_DEFAULT_TEXT`) holding no account number, no real name and
+no phone number. No other file contains the text. The Burial and Expenses defaults are separate constants.
+11.6 A Burial notice and an Expenses notice never conflict (2.6), and a type cannot be changed on an edit (1.1).
+11.7 A failure to read Expenses notices (network, table missing) never blocks expense capture and shows the Default
+Expenses notice (5.4).
+11.8 Spec 1 (`expense-payment-source`) references this requirement for the Expenses notice and adds no notice code of its
+own. Spec 1 carries no per-line Notes column on expenses.
 ## Non-Functional Requirements
 
 N1. The notice, trend and chart code shall add no npm dependency (Open Decision O7).
@@ -353,7 +431,7 @@ task, never by component render tests.
   `item_type === "Burial"`). Recorded as a known issue (design section 15), not fixed here.
 - Fixing the `admin-write` gate gaps (no date-window check, unordered `limit(1)` access row). Recorded for a bugfix spec.
 - A Burial report or trend surface for Secretary, Overseer, Apostle or HO across congregations. The trend is per
-  congregation, on the Burial tab, for Treasurer and Chairperson. An Elder trend is out of scope (8.8).
+  congregation, on the Burial tab, for Treasurer, Chairperson and Elder (8.8).
 - Applying migrations, seeding the dev/demo backend, or deploying Edge Functions.
 - Component render tests (no jsdom or Testing Library; see N5).
 - Any change to `src/ho/` screens other than the new notice screen and one navigation entry.

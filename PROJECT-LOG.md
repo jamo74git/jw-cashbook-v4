@@ -6,7 +6,7 @@
 
 ---
 
-## CURRENT STATE  (as of 2026-11-23)
+## CURRENT STATE  (as of 2026-11-27)
 
 **Repo / branch**
 - Repo: `github.com/jamo74git/jw-cashbook-v4` (also OneDrive-synced).
@@ -70,21 +70,33 @@ launch decision (see Open items).
 uncommitted change — leave it untouched. Baselines: vitest ~224 pass; lint = 1 pre-existing
 error (`_params` unused in `captureRepo.ts`) + 6 warnings; typecheck 0.
 
-**Specs authored, NOT built, migrations NOT applied (2026-11-24; awaiting user decisions)**
-- `.kiro/specs/expense-payment-source` — cash vs officer pre-paid expenses, Invoice No.,
-  forced expense proof, cash balance rule. Open decisions D1-D17 (design.md section 21);
-  D8 must be answered first (decides whether `20261124095000_payment_type_cashbanked.sql`
-  stands alone).
-- `.kiro/specs/burial-notice-and-trend` — DHO burial notices (scope + expiry), burial proof
-  exemption, 12-month burial trend vs prior year, Chairperson faithfulness page. Open
-  decisions O1-O16 (design.md section 17).
-- Authored migrations (unapplied; disposable stack/RLS gate first):
-  `20261124095000_payment_type_cashbanked`, `20261124100000_expense_payment_source`,
-  `20261124110000_burial_notice`, `20261124120000_burial_proof_exempt`,
-  `20261124130000_burial_monthly_totals`.
-
+**Specs authored, NOT built, migrations NOT applied (revised 2026-11-27; awaiting user decisions)**
+- `.kiro/specs/expense-payment-source` (revision 6) — exactly two expense sources (cash from collections, pre-paid by a
+  named officer; no third option, no per-line Notes; Burial carries no officer), Invoice No., forced expense proof, cash
+  balance rule, and NEW: expense categories (about 6, HO/DHO-managed at District or Apostleship scope, built-in "Other" with a
+  short description, six synthetic defaults). Open decisions D1-D21 (design.md section 21); D8 first (decides whether
+  `20261124095000_payment_type_cashbanked.sql` stands alone). New: D18 replace vs merge of category lists (build default replace,
+  answer together with O1), D19 digit-run guard on the Other text, D20 category required, D21 category reports.
+- `.kiro/specs/burial-notice-and-trend` (revision 3) — now ONE generalised notice mechanism with a notice type key (Burial,
+  Expenses): one table `scope_notice`, one edit screen `/ho/notices`, one Edge action pair, one Dexie store; also Burial proof
+  exemption, 12-month Burial trend vs prior year, Chairperson/Elder faithfulness page. Open decisions O1-O18 (design.md section 17);
+  O13 partly resolved; new O17 (extra notice surfaces) and O18 (Default Expenses wording).
+- **Resolved by the user 2026-11-27:** all roles read notices, Secretary included (read-only Notices panel on the Secretary
+  reports screen, RD1); the Elder also sees the Burial trend, totals only (RD2); the Expenses notice follows the Burial
+  notice process exactly (RD3); no per-line Notes column on expenses (RD4).
+- Still open, to answer together: notice precedence O1 ("most specific overrides broader" vs show all, build default show all,
+  cap 3) and category replace-vs-merge D18.
+- Read-only backend facts used (SELECT only, no writes): `level_type` values are title case; `user_hierarchy_access.start_date` is
+  `timestamptz`; the Elder access row is `scope_level='Eldership'`, `congregation_id` NULL, `hierarchy_id` = congregation
+  `eldership_id`; congregation-scope rows use `hierarchy_id` = `congregations.hierarchy_id`; no Secretary access row exists in the
+  test data (Secretary read path proven only on a stack).
+- Authored migrations (unapplied; disposable stack / RLS gate first), in apply order: `20261124095000_payment_type_cashbanked`,
+  `20261124100000_expense_payment_source`, `20261124110000_scope_notice` (renamed from `..._burial_notice`; adds shared scope
+  helpers), `20261124115000_expense_category` (new), `20261124120000_burial_proof_exempt`, `20261124130000_burial_monthly_totals`
+  (Elder branch, output columns `yr`/`mo`). None has been parsed by Postgres.
+- Implementation order is interleaved across the two specs (see the "Cross-spec order" note in both tasks.md files).
 **Open items to carry forward**
-- Answer the spec open decisions above (expense-payment-source D1-D17; burial-notice-and-trend O1-O16).
+- Answer the spec open decisions above (expense-payment-source D1-D21; burial-notice-and-trend O1-O18; D18 and O1 together).
 - Production `proof_mandatory` default decision (currently demo = false).
 - Enable Supabase leaked-password protection before launch (currently off).
 - `get_week_number` function has mutable search_path (pre-existing WARN).
@@ -95,6 +107,15 @@ error (`_params` unused in `captureRepo.ts`) + 6 warnings; typecheck 0.
 ---
 
 ## SESSION JOURNAL  (newest first)
+
+### 2026-11-27
+- Revised the two unbuilt specs (documentation only, no code, no migration applied, no backend write, no push) for the user's
+  additions: exactly two expense sources; no Notes column; a generalised notice mechanism (type Burial or Expenses, one table,
+  one screen) with the Expenses notice above the expense line; expense categories as HO/DHO configuration with "Other";
+  all roles read notices; Elder sees the Burial trend. Authored `20261124115000_expense_category.sql`, regenerated
+  `20261124110000_scope_notice.sql` (renamed) and updated `20261124130000_burial_monthly_totals.sql`. Fixed the 5 NITs of the
+  previous review. Read-only SELECTs on the dev/demo backend established the Elder and Secretary row shapes.
+- Open decisions: D1-D21, O1-O18 (see CURRENT STATE); next: user answers (D8 first, then D18 with O1), then build on a disposable stack.
 
 ### 2026-11-24
 - Authored two specs (requirements/design/tasks) from UAT feedback: `expense-payment-source`

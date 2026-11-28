@@ -6,24 +6,31 @@
 -- without explicit user authorisation. Test first on a disposable stack (supabase start).
 -- This file has never been parsed by Postgres. UNVERIFIED until task T19.
 --
--- Returns aggregates only: (year, month, total, period_ids). No line item, receipt number or proof.
--- Caller must hold an active, in-window Treasurer or Chairperson access row AT THE SAME congregation
--- (role and congregation on ONE user_hierarchy_access row, the Tranche 4 pattern). Elder, Secretary,
--- Auditor and every other role get no rows.
+-- Returns aggregates only: (yr, mo, total, period_ids). No line item, receipt number or proof.
+-- (Output columns are yr and mo, not year and month, so they cannot clash with cp.year / cp.month
+-- inside the plpgsql body; review 2026-11-26 NIT 5.)
+-- Authority is ONE active, in-window user_hierarchy_access row, either:
+--   (a) role Treasurer, Chairperson or Elder with congregation_id = p_congregation_id (the Tranche 4
+--       role-and-congregation-on-one-row pattern), or
+--   (b) role Elder, scope_level 'Eldership', hierarchy_id = the congregation's eldership_id. Verified
+--       read-only on the dev/demo backend (2026-11-27): the Elder access row has congregation_id NULL
+--       and hierarchy_id equal to congregations.eldership_id, so (b) is the branch that applies to a
+--       real Elder. User decision 2026-11-27: the Elder sees the trend (totals only).
+-- Secretary, Auditor and every other role get no rows.
 -- Invalid arguments (NULL congregation, month outside 1-12, year outside 2000-2100) return NO ROWS and
 -- raise nothing (design 10, integration case 8d).
 -- Burial is identified by section = 'Burial' (never item_type: markCashBanked rewrites item_type).
 -- Draft and Rejected periods are excluded.
 --
--- DEPENDS-ON-UNVERIFIED: user_hierarchy_access.start_date/end_date types and congregation_id on every
--- row; cashbook_line_item.amount and period_id column names; period_status enum literals.
+-- VERIFIED read-only 2026-11-27: user_hierarchy_access.start_date is timestamptz; Elder rows use the
+-- Eldership scope (see above). DEPENDS-ON-UNVERIFIED: end_date type; cashbook_line_item.amount and period_id column names; period_status enum literals.
 -- No DROP statements in this file.
 -- ============================================================================
 
 create or replace function public.burial_monthly_totals(
   p_congregation_id uuid, p_end_year int, p_end_month int
 )
-returns table (year int, month int, total numeric, period_ids uuid[])
+returns table (yr int, mo int, total numeric, period_ids uuid[])
 language plpgsql stable security definer set search_path to '' as $$
 begin
   -- argument validation: return no rows (not an error) so the client simply hides the chart
@@ -32,14 +39,19 @@ begin
     return;
   end if;
 
-  -- role and congregation on the SAME access row (F22); no get_my_hierarchy_ids() dependency
+  -- role and congregation (or Elder eldership) on the SAME access row (F22); no get_my_hierarchy_ids() dependency
   if not exists (select 1 from public.user_hierarchy_access uha
                   where uha.user_id = (select auth.uid())
                     and uha.status = 'active'
                     and uha.start_date <= now()
                     and (uha.end_date is null or uha.end_date >= now())
-                    and uha.congregation_id = p_congregation_id
-                    and uha.role in ('Treasurer','Chairperson')) then   -- Elder deliberately excluded
+                    and (
+                         (uha.congregation_id = p_congregation_id
+                          and uha.role in ('Treasurer','Chairperson','Elder'))
+                         or (uha.role = 'Elder' and uha.scope_level = 'Eldership'
+                             and uha.hierarchy_id = (select c.eldership_id from public.congregations c
+                                                      where c.id = p_congregation_id))
+                        )) then
     return;
   end if;
 
@@ -68,10 +80,10 @@ grant execute on function public.burial_monthly_totals(uuid,int,int) to authenti
 --  8.  period_ids lists exactly the periods making up total; banked Burial lines (item_type CashBanked)
 --      are counted; Draft and Rejected excluded.
 --  8b. Treasurer at A plus Auditor at B: call for B returns no rows; call for A returns rows.
---  8c. Elder-only row at A returns no rows. Secretary and Auditor return no rows.
+--  8c. Elder with an Eldership row covering A (congregation_id NULL) gets rows for A and none for a
+--      congregation under another eldership. Secretary and Auditor return no rows.
 --  8d. month 0, month 13, year 1999, year 2101, NULL arguments: no rows and no error.
---  Also confirm: plpgsql output column names year/month do not clash with the qualified column
---  references (cp.year, cp.month); if they do, alias the output columns (yr, mo) and adjust the client.
+--  Output columns are already yr and mo; the body qualifies cp.year / cp.month / win.y / win.m.
 --  Confirm the generate_series(timestamp, timestamp, interval) overload resolves.
 -- END - NOT APPLIED.
 -- ============================================================================

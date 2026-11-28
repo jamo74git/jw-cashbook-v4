@@ -1,7 +1,6 @@
 # Design Document: Expense Payment Source, Officer Pre-paid Expenses, Multi-proof and Balance Rule
 
-Status: DRAFT for user approval, 2026-11-24, revision 5 (fourth review findings addressed, see section 26; earlier rounds in section 25). Documentation only. The migration is authored at
-`supabase/migrations/20261124100000_expense_payment_source.sql` and is NOT applied. Nothing is committed or pushed.
+Status: DRAFT for user approval, revision 6, 2026-11-27 (revision 5 answered the fourth review, section 26; rounds 1 to 4 are sections 23 to 26 in ascending order; revision 6 adds the user's additions of 2026-11-27, sections 27 to 29). Documentation only. Two migrations are authored and NOT applied: `supabase/migrations/20261124100000_expense_payment_source.sql` (payment source, balance) and `supabase/migrations/20261124115000_expense_category.sql` (expense categories). Nothing is applied or pushed; document and SQL-file changes are committed locally only.
 Requirements: `requirements.md` (numbers such as R3.1 refer to it). **[UNVERIFIED]** marks anything not read
 from code or the schema.
 
@@ -17,7 +16,9 @@ to: all income is banked or electronic, cash expenses do not exceed the tithe ca
 are neutral. The deposit slip amount becomes the net deposit (gross cash minus cash expenses). The server stops
 trusting the client's `balanced` flag and computes the rule itself.
 
-Proofs for expenses move to a new local store (`lineProofs`, Dexie v5) so an expense can have many proofs. The proof
+Exactly two sources exist and nothing else (requirement 1.9): there is no third option and no per-line Notes field; the Expenses notice of `burial-notice-and-trend` (Spec 2) is shown above the expense capture line instead (section 28). Every expense also carries a category chosen from an HO-managed list (District or Apostleship scope) with a built-in "Other" that needs a short description (section 27). Category storage, scope resolution, the line columns, the offline cache and the capture control are owned by this spec; the shared scope, HO-authority and read-rule SQL helpers, the admin-write path and the HO scope picker are reused from Spec 2, not copied.
+
+Proofs for expenses move to a new local store (`lineProofs`, Dexie v5, together with `expenseCategories`) so an expense can have many proofs. The proof
 dialog gets a label prop so the reference reads "Invoice No." for expenses, plus optional supplier and document
 amount fields that a later OCR step can fill.
 
@@ -45,12 +46,15 @@ dependency.
 | F13 | Sync order inside `reconcilePeriod`: all line items, then the deposit slip, then `cashbook_submit_period`. Any failure throws before the submit RPC. | `syncEngine.ts` 342-465 |
 | F14 | R500 check: `monthlyExpensesExceedThreshold(items, 500)` sums all expenses of the period (known per-period defect, recorded in `captureTotals.characterization.test.ts`). The constant `R500` is hard-coded in `CashbookForm.tsx` line 33. `congregation_settings.expense_approval_threshold` exists on the server and in the Dexie type, but `cacheLoader` selects only `congregation_id, proof_mandatory` (commit c98feafd) and no code reads the threshold. | `captureTotals.ts` 94-98; `CashbookForm.tsx` 33, 210; `schema.ts` 107; `cacheLoader.ts` |
 | F15 | `officers` has no `user_id` column (id, congregation_id, officer_code, names, rank, is_active, ... interim fields). The code cannot tell whether the prepaid officer is the signed-in submitter. | read-only query 2026-11-24 |
-| F16 | Dexie is at version 4. Non-indexed object fields need no version bump; a new store needs `version(5)`. | `schema.ts` 323-370 |
+| F16 | Dexie is at version 4. Non-indexed object fields need no version bump; a new store needs `version(5)` (this spec's version carries two stores, `lineProofs` and `expenseCategories`). | `schema.ts` 323-370 |
 | F17 | Readers of `cashbook_line_item`: `AuditReviewPage.tsx` 139-146, `ChairpersonDashboard.tsx` 181-184, `ElderDashboard.tsx` 199-202, `OverseerReview.tsx` 209-212, `HOReview.tsx` 205-208, `SecretaryReview.tsx` 134-137, `officerFaithfulnessLive.ts` 26-29, `src/lib/supabase/queries.ts` 109-158. | grep |
 | F18 | Chair and Elder tithing review group lines by `officer_id`, then by `is_officer`, and sum only cash and deposit item types (`CASH_TYPES`, `DEPOSIT_TYPES`). An Expense line with an `officer_id` is therefore ignored today. | `ChairpersonDashboard.tsx` 261-267; `ElderDashboard.tsx` 356-359 |
 | F19 | Test tooling: vitest, fast-check, fake-indexeddb. No React Testing Library, no jsdom. | `package.json` |
 | F20 | Latest applied migration is `20261105150000_fix_guard_enum`. | `PROJECT-LOG.md`; `supabase/migrations/` |
 | F21 | Impact on existing server periods (read-only aggregate query, 2026-11-24): 14 periods; 7 have Expenses rows (4 Draft, 2 AuditApproved, 1 SubmittedToHO); `cashbook_submission_manifest` has 0 rows. So no existing period has a stored `manifest.balanced`, and none can flip under `cashbook_review_ready`. The 3 past-Draft periods have no manifest, so `review_ready` already returns false for them (no manifest row for the revision). The risk is for manifests created between now and the apply. | read-only query; migration header "PRE-APPLY IMPACT CHECK" |
+| F22 | `cashbook_line_item` has no category column and no notes column (F5 lists every live column). No expense category concept exists in the code or in any spec before this revision (grep `categor` over `expense-payment-source`: 0 hits, 2026-11-27, before the edits). | F5; grep | Verified |
+| F23 | The congregation cache already carries `district_id` and `apostleship_id` (and `overseership_id`), so category scope resolution needs no new column. `refreshReferenceCache` replaces each store only when its own query succeeded. | `burial-notice-and-trend` design F12; `cacheLoader.ts` | Verified |
+| F24 | Role and scope facts for the HO write path and the read rule were read from the dev/demo backend (SELECT only, 2026-11-27): HO access is `scope_level = 'District'` with `hierarchy_id` = the district; `hierarchy_levels.level_type` is title case; `user_hierarchy_access.start_date` is `timestamptz`. See Spec 2 design F27. | `burial-notice-and-trend` design F27 | Verified |
 
 ## 3. Key decisions
 
@@ -115,6 +119,8 @@ filter in `balanceBreakdown` and one in the SQL function.
 | `cashbook_line_item.expense_payment_source text` | Values `CongregationCash`, `OfficerPrepaid`. NULL for non-Expenses rows. Backfill `CongregationCash` for the 10 existing Expense rows. |
 | CHECK `cashbook_line_item_expense_source_check` | Expenses rows: source in the two values and `(source='OfficerPrepaid') = (officer_id is not null)`. Other rows: source IS NULL. |
 | Trigger `trg_line_item_expense_guard` (BEFORE INSERT OR UPDATE) | Old clients: null source on an Expenses row becomes `CongregationCash`; non-Expenses rows are forced to NULL. Prepaid: officer must be active and belong to the period's congregation (checked on insert, or when officer or source changes, so later proof-status updates never fail). SQLSTATE 23514. |
+| `cashbook_line_item.expense_category text`, `expense_category_other text` (separate migration `20261124115000_expense_category.sql`, section 27) | Category label snapshot (1-40 chars) and, only for the built-in label `Other`, a description (1-60 chars). NULL on every existing row and every non-Expenses row. CHECK `cashbook_line_item_expense_category_check` validates format only, not membership in a list. |
+| `expense_category_config` table, `expense_category_publish`, `expense_category_clear` (same migration) | HO-managed list per District or Apostleship. Reuses Spec 2's SQL helpers `scope_resolve_district`, `scope_assert_ho` and the read function `scope_district_readable`. Browser SELECT only (any role). See 27.2. |
 | `cashbook_attachment`: `supplier_name text`, `document_amount numeric(12,2) >= 0`, `entry_source text not null default 'manual' in ('manual','ocr')` | OCR-ready optional metadata. `bank_reference` unchanged. Existing RLS unchanged (policies check object path, period and congregation, not these columns). |
 | `payment_type` CHECK widened (**separate migration, D8**) | Adds `CashPending`, `CashBanked`. Needed so banked cash can sync at all (F7). Recommended D8 = separate file `20261124095000_payment_type_cashbanked.sql` (sorts before the main migration), now authored (NOT APPLIED), reviewed and tested by task T13. Section 5 of `20261124100000_expense_payment_source.sql` is replaced by a pointer comment. If the user answers D8 = "inside this migration", T13 is skipped and section 5 stays. Either way exactly one file widens the CHECK. |
 | `cashbook_period_balance(uuid) returns jsonb` | Server authority for the rule. SECURITY DEFINER, `search_path ''`, STABLE, **not granted to `authenticated`** (internal use by the two definer functions; avoids a cross-congregation read). |
@@ -141,7 +147,11 @@ Add optional, non-indexed field `expense_payment_source?: "CongregationCash" | "
 an Expense row means `CongregationCash`. Add it to `MUTABLE_LINE_FIELDS` in `syncEngine.ts` (line 260) so an edit
 leaves the row pending. `officer_id` already is in that list.
 
-### 4.3 Client: new store `lineProofs` (Dexie `version(5)`, additive)
+Also add optional, non-indexed `expense_category?: string | null` and `expense_category_other?: string | null` (section 27), likewise
+added to `MUTABLE_LINE_FIELDS`. An undefined category on an Expense row means "Uncategorised"; `expense_category_other` is set only when
+`expense_category === "Other"`. There is no notes field (requirement 11.1).
+
+### 4.3 Client: new stores `lineProofs` and `expenseCategories` (Dexie `version(5)`, additive)
 
 ```ts
 export interface LocalLineProof {
@@ -162,6 +172,7 @@ export interface LocalLineProof {
   uploadedAt: string | null;  // set when the attachment row is acknowledged
 }
 // stores: lineProofs: "localId, lineLocalId, periodLocalId"
+//         expenseCategories: "id, district_id, scope_id"      (section 27.4; one version, two additive stores)
 ```
 
 `uploadedAt` is deliberately not indexed (IndexedDB cannot index null). Filter in memory. No `.upgrade()` function:
@@ -333,6 +344,14 @@ adds them to `AddLineInput`.
 When prepaid is not available on the server (capability flag false, R9.2) the control shows only "Paid from
 congregation cash" with a one-line note.
 
+Category control (R10.1, R10.9; section 27.5). Directly after the source control add a required category `<select>` with no
+default, listing `resolveCategoryList(...)` (the list in force, then the built-in "Other" last). Choosing "Other" reveals a text input
+(`maxLength` 60, hint "Never enter passwords, PINs or account numbers."). `expenseCaptureValidation` gains `category`, `categoryOther`
+and `categoryLabels` and applies the rules of 27.6. The bar adds no Notes input (R11.1).
+
+The Expenses notice (Spec 2 requirement 11) renders between the tab row and this capture bar. That slot and its component belong to
+Spec 2 (task T7 there); this task adds no notice code and must leave the slot free (R11.3).
+
 ### 7.2 Officers tab action (R1.5)
 
 In each officer group header add a small "Record pre-paid expense" button (visible when `canEdit`). It calls
@@ -481,10 +500,10 @@ only if `net_deposit > 0`; (iv) a slip `amount` that differs from the sum of cov
 
 ## 12. Offline and rollout compatibility
 
-- Dexie v5 adds only the `lineProofs` store (F16). Opening v4 data upgrades without touching rows.
+- Dexie v5 adds only the `lineProofs` and `expenseCategories` stores (F16). Opening v4 data upgrades without touching rows. If Spec 2's notice store already took `version(5)`, this spec takes the next free number (each task reads `schema.ts` first).
 - Capability probe: after the reference refresh, `cacheLoader` runs `select expense_payment_source from cashbook_line_item limit 0`
-  and `select supplier_name from cashbook_attachment limit 0`, each independently, and stores
-  `syncMeta['serverCaps'] = { expensePaymentSource: boolean, attachmentMeta: boolean }`. Both are read only.
+  , `select supplier_name from cashbook_attachment limit 0` and `select expense_category from cashbook_line_item limit 0`, each independently, and stores
+  `syncMeta['serverCaps'] = { expensePaymentSource: boolean, attachmentMeta: boolean, expenseCategory: boolean }` (the third from `select expense_category from cashbook_line_item limit 0`). All probes are read only.
   The pure function `nextServerCaps(previous, probeResult)` (in `src/utils/serverCaps.ts`) owns the rules:
   1. **Default (flag never stored):** each capability is `false`. The UI shows the cash path only and the sync row omits
      the new fields. This covers a restored session where `refreshReferenceCache` never ran (it runs only from
@@ -499,7 +518,7 @@ only if `net_deposit > 0`; (iv) a slip `amount` that differs from the sum of cov
      un-migrated one.
   5. Each capability is probed and stored independently; one failing probe does not discard the other, and a failing
      probe never aborts the rest of `refreshReferenceCache` (same `Promise.allSettled` pattern as `cacheLoader`).
-  `CapturePage` reads the flags once on mount, through `getServerCaps()` which returns `{false,false}` when absent.
+  `CapturePage` reads the flags once on mount, through `getServerCaps()` which returns all three flags `false` when absent.
   Because a missing flag means "cash path only", a user who signs in on a restored session sees no pre-paid option until
   the next online login refreshes the flag (acceptable; recorded in risk R-8).
 - Sync compatibility: when the flag is false the sync row omits `expense_payment_source` and the attachment metadata
@@ -514,7 +533,7 @@ only if `net_deposit > 0`; (iv) a slip `amount` that differs from the sum of cov
 
 | Screen | Change |
 |---|---|
-| `AuditReviewPage.tsx` | Select `expense_payment_source` with the line items (line 142). Fetch attachments filtered to this period's line ids and extended columns (line 143 currently selects every visible attachment and filters in memory by id). Expense panel (lines ~578-606): source badge, officer, all proofs with Invoice No., supplier, date, amount, and the R5.6 warning. "Grand Total" (line 614) becomes `income - cashExpenses`, with a separate "Pre-paid by officers" line. `reviewReadiness` uses `balanceBreakdown` through `computeReviewReadiness`. Expense lines are always proof-required in `computeReviewReadiness` (mirror of the server rule). |
+| `AuditReviewPage.tsx` | Select `expense_payment_source` with the line items (line 142). Fetch attachments filtered to this period's line ids and extended columns (line 143 currently selects every visible attachment and filters in memory by id). Expense panel (lines ~578-606): source badge, officer, category and Other description (R10.12), all proofs with Invoice No., supplier, date, amount, and the R5.6 warning. "Grand Total" (line 614) becomes `income - cashExpenses`, with a separate "Pre-paid by officers" line. `reviewReadiness` uses `balanceBreakdown` through `computeReviewReadiness`. Expense lines are always proof-required in `computeReviewReadiness` (mirror of the server rule). |
 | `ChairpersonDashboard.tsx` | Select the new field (line 183). `govTotal` (line 256) becomes `fundsKept` (`Members + Officers + Burial - cashExpenses`); add "Total tithing recorded" (`tithingRecorded`) and a pre-paid line. Tithing review uses `officerTithingTotals` (F18). |
 | `ElderDashboard.tsx` | Same changes (lines 201, 356-359). |
 | `OverseerReview.tsx`, `HOReview.tsx` | Select the new field (lines 211, 207); totals through `balanceBreakdown`. **[UNVERIFIED]** their exact aggregation code was not read; task T15 reads it first. |
@@ -566,6 +585,10 @@ No new secret or personal data is logged (N3).
 | prepaid `officer_id` | required if prepaid; must be in the loaded officer list for the congregation; absent if cash | block save; server trigger rejects mismatch |
 | Expense amount | number > 0, at most 2 decimals after rounding | block save |
 | Expense description | required, trimmed, 1-200 chars (limit new; existing is required only) **[UNVERIFIED]** server length | block save |
+| Expense category | required for new expenses (D20); one of the labels in the list in force, or the built-in `Other`; trimmed, 1-40 chars | block save (client); server CHECK checks format only (23514) |
+| Other description | required iff category is `Other`; trimmed, 1-60 chars, no control characters, no run of 9 or more digits (D19, client only); absent otherwise | block save (client); server CHECK 23514 on missing, empty, over-long or control characters |
+| Category list (HO form) | 1-8 labels; each trimmed, 1-40 chars, no control characters, unique ignoring case, not `Other` | 400 (22023) from `expense_category_publish`; the client validator rejects first |
+| Category scope node | District or Apostleship only; node exists, level matches, chain reaches a District; district assigned to the HO | 400 / 403 |
 | Expense date | optional; default today; not in the future | block save (existing) |
 | Proof photo | required; image file; compressed by `compressImage` (existing) | Save disabled |
 | Proof date | required for expense proofs (existing `requireDate` default); not in the future | Save disabled |
@@ -585,6 +608,9 @@ No new secret or personal data is logged (N3).
 | Expense proof exists before review | Server `review_ready`; client Submit guard | Server is the authority; client avoids a wasted round trip |
 | Cash expense frozen after banking | Client repo guard | The deposit photo is a client artefact; the server sees the mismatch through `slip.amount` (R4.8) |
 | Officer total = tithe + prepaid | Shared pure function | Single definition, used by all readers |
+| Category list writes: HO only, assigned districts, District or Apostleship scope | `expense_category_publish` / `expense_category_clear` (service_role only) + `admin-write` gate, via the shared helpers `scope_resolve_district` and `scope_assert_ho` | One checked path for all HO configuration writes; no browser write grant |
+| Every role reads category lists | `scope_district_readable` (no role term), shared with notices | RD1 of Spec 2 applies to categories too; offline cache is the working copy |
+| Category label and Other text format | Postgres CHECK `cashbook_line_item_expense_category_check` + client validators | Format holds for every writer; membership in the current list is deliberately not enforced (offline capture) |
 | HO-only admin, Secretary totals only, permission gate | Unchanged (`permissions.ts`; steering invariants 1, 2, 7) | Nothing here widens any role. Expense capture uses the existing `expenses.create` / `capture.create` checks. |
 
 ## 18. Test plan
@@ -621,12 +647,24 @@ Additional unit tests added in this revision:
 - **P8 ceiling consistency:** for any ledger where no line is `CashBanked`, after simulating banking all eligible lines, `titheCashBanked(after) === titheCashAvailable(before)`, and `C <= titheCashAvailable(before)` implies the post-banking `cashExpensesExceedCash` is false.
 - **P7 repeat-banking consistency:** for any ledger, banking in one step or in two steps (cash split at any point) ends with the same `depositNetAmount` (`Bg - C`), and the sum of the physical deposits equals that amount.
 
+Category tests (section 27.8), added in revision 6:
+
+- `expenseCategories.test.ts`: `resolveCategoryList` for vectors CV1-CV8 (Appendix C) under REPLACE, and under MERGE through a second table so D18's alternative is pinned; the built-in default list has six labels, each valid under the label rules, none equal to "Other"; `validateCategoryList` rejects 0, 9, duplicate (any case), "other", 41 characters, control characters and untrimmed labels.
+- `expenseCaptureValidation` extension: no category fails with field `category`; Other with empty, 61-character, control-character and 9-digit descriptions fails with field `categoryOther`; Other with "Gas bottle" passes; a non-Other category with a description present is rejected (the description is cleared); labels not in the list are rejected on the client even though the server would accept the format.
+- Property P9 (category format): for any generated (label, other) pair, the client validator accepts it iff the pure re-statement of the server CHECK accepts it (the CHECK is restated as a TypeScript predicate in the test and pinned to the SQL text by a comment).
+- `serverCaps.test.ts` extended: three flags; `expenseCategory` follows the same rules per branch and does not disturb the other two.
+- `cacheLoader` test: the category query is in the same `allSettled` pass; failure keeps the cached rows; success replaces; a missing table logs one warning and the default list shows.
+- `syncEngine.expense.test.ts` extended: the sync row carries `expense_category` and `expense_category_other` when `expenseCategory` is true and omits both when false; a line captured under a list that was later replaced still syncs.
+- Server (`supabase/tests/expense_category.test.sql`, unexecuted here): the cases listed at the end of `20261124115000_expense_category.sql`.
+
 Pure view-model helpers (so the UI tasks are verifiable in the node-only test environment, F19). Each is a
 side-effect-free function in `src/capture/` or `src/lib/`, unit tested before the component uses it:
 
 | Helper | Returns | Used by |
 |---|---|---|
-| `expenseCaptureValidation({source, officerId, amount, date, description, officerIds})` | `{ok:true}` or `{ok:false, field, message}` | Expenses capture bar (R1.1-1.6) |
+| `expenseCaptureValidation({source, officerId, amount, date, description, officerIds, category, categoryOther, categoryLabels})` | `{ok:true}` or `{ok:false, field, message}` | Expenses capture bar (R1.1-1.6, R10.1, R10.9) |
+| `resolveCategoryList(rows, ids)` and `categoryListView(rows, ids)` | ordered labels plus the built-in "Other", and a source note ("Apostleship list", "District list", "Standard categories") | Expenses capture bar, HO category screen preview (R10.4, R10.5) |
+| `validateCategoryList(labels)` | `{ok:true}` or `{ok:false, index, message}` | HO category screen (R10.2) |
 | `deleteDialogText({kind, officerName, amount, proofCount})` | dialog string (R6.2) | delete dialog |
 | `bankingConfirmationModel(view, isLaterBanking)` | rows and deposit amount, `blocked` reason (R4.1, R4.2, R3.7) | Mark Banked dialog |
 | `capturePanelModel(breakdown)` | rows, verdict (`balanced`/`awaiting`/`notBalanced`/`cashShortfall`), message | right-hand balance card (R3.6, R3.7) |
@@ -663,6 +701,9 @@ columns before step 5 would break line sync on the preview. The omit-when-capabi
 | R-8 Capability flag absent or wrongly false | Prepaid hidden on a migrated backend (restored session, never probed) | Absent = false is fail-safe; only `42703`/`PGRST204` set false; other errors keep the previous value; re-probed on every online login (`nextServerCaps` unit-tested per branch); error shape marked UNVERIFIED and confirmed on the stack |
 | R-10 Second banking replaces the slip photo | Auditor sees only the latest deposit photo, while the amount is the sum | Documented simplification (5.5); amount is the whole-period net; D16 offers the block-after-banking alternative |
 | R-11 Interim officer rejected by HO after a pre-paid expense | A later edit changing the officer fails 23514; existing rows stay valid | Trigger tests officer only on insert or when officer/source changes (4.1); accepted, revisit with HO officer-approval workflow |
+| R-12 Category lists drift between scopes (merge versus replace unclear, or a congregation sees an unexpected list) | Inconsistent labels in reports | D18 recorded with a recommendation; the HO screen shows which list is in force and from which scope; one pure resolver; vectors CV1-CV8 |
+| R-13 Free text in "Other" holds sensitive data (an account number, a password) | Sensitive data stored and shown to reviewers | 60-character limit, control characters rejected, digit-run guard (D19), explicit hint, never logged; residual: a short secret in words cannot be detected |
+| R-14 A congregation captures an expense offline under a list that is replaced before it syncs | Line label not in the current list | Snapshot label; server checks format only (10.8); reports group by label text |
 | R-9 Old PWA build open during rollout | Old build omits the field | Trigger defaults it (R9.3) |
 
 ## 21. Open decisions (the user must answer)
@@ -688,6 +729,10 @@ columns before step 5 would break line sync on the preview. The omit-when-capabi
 | D13 | Cash expenses frozen once cash is banked; build "reverse banking" later? | Freeze now; reverse-banking spec next | Without it, a Rejected period with a wrong cash expense is stuck |
 | D14 | A purchase paid partly from cash and partly by an officer: two lines (A4)? | Two lines | One line with two sources would need a split table |
 | D15 | Net deposit of R0: allow marking banked with no slip photo? | Yes | Otherwise the treasurer would have to photograph nothing |
+| D18 | When an Apostleship has its own category list and its District has one too, does the more specific list REPLACE the broader one, or MERGE with it? (Open; the build default until answered is REPLACE. Answer together with Spec 2 O1, the same question for notices.) | REPLACE: the most specific list in force applies entirely | Replace: the DHO of an apostleship controls the whole list, no duplicates, always at most 8 labels. Merge: a district-wide list always shows and apostleships only add, but the list can exceed 8, labels can duplicate and an apostleship cannot drop a district label |
+| D19 | Digit-run guard on the "Other" description: reject a run of 9 or more consecutive digits? | Yes (client side; the server stays format-only) | Blocks an accidental account or ID number; also blocks a legitimate long invoice number typed into the description (the Invoice No. field on the proof is the right place for it) |
+| D20 | Is a category required on every NEW expense? | Yes, with "Other" as the escape | Forces data quality; a Treasurer who finds no fit picks Other and describes it. Alternative: optional, which leaves most lines "Uncategorised" |
+| D21 | Category subtotals or reports (per category totals on review screens)? | Not now | Out of scope; the stored label snapshot makes it a later read-only addition |
 
 ### 21.1 If the answer differs from the recommendation
 
@@ -704,9 +749,16 @@ Requirements that depend on a decision carry a tag such as `[D2]` (see `requirem
 | D7 (same officer list) = "include Elders" | R1.2 list | rank filter in `cacheLoader.ts` 56-58 and the officer rank rules | none |
 | D15 (R0 net deposit without slip) = "slip always" | R4.5 removed | `markCashBanked` zero path; item (iii) of `cashbook_review_ready` | V4 deposit step |
 | D17 (legacy manifests keep old rule) = "new rule for all" | R3.11 removed | Drop migration section 7a, the `balance_rule = 1` branch of `cashbook_review_ready`, and the `balance_rule` column; any period flagged by the pre-apply check must be re-captured | none |
+| D18 (replace) = "merge" | R10.4 resolves to the union of the District and Apostleship lists, de-duplicated case-insensitively, District labels first, then the Apostleship labels; the 8-label cap applies per list, not to the union | `resolveCategoryList` in `src/lib/expenseCategories.ts` (one function); the HO screen preview text; vectors CV3, CV4, CV6 change (Appendix C); no SQL change (the SQL stores lists per scope either way) | CV3, CV4, CV6 |
+| D19 (digit-run guard) = "no guard" | R10.9 loses the 9-digit rule | `validateOtherDescription` in `expenseCategories.ts` and its test; no SQL change | none |
+| D20 (required) = "optional" | R10.1 allows saving with no category | `expenseCaptureValidation` rule; `expenseProofState` unaffected; "Uncategorised" appears on new lines too | none |
 | D16 (allow second banking) = "block" | R4.9 replaced by a block rule | `assertCashLinesEditable` also guards Members/Officers/Burial cash adds | V11, V12 removed |
 
 ## 22. Assumptions and unverified items
+
+- (Revision 6) Where today's Burial capture bar offers an officer picker was not read; requirement 1.10 holds either way and T9 reads it. `SecretaryReview.tsx` was not read for the category display; the Secretary shows no category detail (R10.12).
+- (Revision 6) The SQL in `20261124115000_expense_category.sql` has never been parsed by Postgres. It calls the three shared helpers defined in `20261124110000_scope_notice.sql`, also unparsed. Both are checked only on a disposable stack (T27).
+- (Revision 6) The Secretary read path for category rows is proven only on a stack (no Secretary access row exists in the test data, Spec 2 F27).
 
 - The Chair/Elder/Overseer/HO/Secretary screens (F17) were read only where cited. T15 reads each fully before editing.
 - Existing triggers on `cashbook_line_item` and the exact UPDATE RLS for locked periods were not read. The trigger name and
@@ -715,6 +767,21 @@ Requirements that depend on a decision carry a tag such as `[D2]` (see `requirem
 - `CapturePage.tsx` was not re-read for this spec beyond findings section 2.4; the capability flag read follows its
   existing `getProofMandatory` pattern.
 - The two live NULL `payment_type` Expense rows are covered by the CHECK (NULL passes).
+
+## Appendix C: Category resolution vectors (client; the server stores lists per scope only)
+
+Congregation ids: district D1, apostleship A1. Default list = `EXPENSE_CATEGORY_DEFAULTS` (six labels, 27.3). "Other" is always appended and is omitted from the Result column. Build default = REPLACE.
+
+| Case | Configured lists | Result (REPLACE) | Result (MERGE, if D18 changes) |
+|---|---|---|---|
+| CV1 | none | the six defaults | the six defaults |
+| CV2 | D1 list: Cleaning, Repairs | Cleaning, Repairs | Cleaning, Repairs |
+| CV3 | D1 list: Cleaning, Repairs; A1 list: Repairs, Transport | Repairs, Transport | Cleaning, Repairs, Transport |
+| CV4 | A1 list only: Transport | Transport | Transport |
+| CV5 | A2 list (another apostleship) only | the six defaults | the six defaults |
+| CV6 | D1 list: Cleaning; A1 list: cleaning (lower case) | cleaning | Cleaning |
+| CV7 | D1 list retired (cleared); A1 list: Transport | Transport | Transport |
+| CV8 | rows for a different district only | the six defaults | the six defaults |
 
 ## Appendix A: Golden vectors (client and server must agree)
 
@@ -771,6 +838,17 @@ Findings 6-14 belong to `burial-notice-and-trend` and are not answered here.
 | 3 | MEDIUM | Addressed. Two named period-level numbers: `tithingRecorded` = Members + Officers + pre-paid (V2: 820) and `fundsKept` = income - cash expenses (V2: 700). Both are returned by `balanceBreakdown`, shown by every review screen and returned by each `*Totals` helper; neither is swapped for the other. Requirement 2.8 added. The user answer needed is recorded as D6b (recommend both). | requirements 2.8, 8.2; design 5.1, 6, 13, section 18, D6b, Appendix A |
 | 4 | MEDIUM | Addressed. Verified in code: the interim insert sets `is_active: true` (`CashbookForm.tsx` 158), so interim officers pass the trigger and stay in R1.2. The live column default of `officers.is_active` was not read and is marked UNVERIFIED, because the form path does not depend on it. Residual risk of HO later rejecting an interim officer recorded as R-11. | requirements 1.2; design 4.1, R-11 |
 | 5 | NIT | Addressed. 4.8 now precedes 4.9, 9.3 precedes 9.4 and 9.5. F11 states the slip rule sits inside the `proof_mandatory = true` branch and that the new expense-proof and balance checks sit outside it. | requirements 4, 9; design F11 |
+
+## 25. Responses to design review (review.json, revision 4)
+
+Findings 1, 2, 4 and 7-10 belong to `burial-notice-and-trend` and are not answered here.
+
+| # | Severity | Response | Where |
+|---|---|---|---|
+| 3 | MEDIUM | Addressed. Read-only aggregate query on the dev/demo backend: 14 periods, 7 with Expenses rows, 0 rows in `cashbook_submission_manifest`, so no period flips today (F21). The migration header now carries an id-level PRE-APPLY IMPACT CHECK (SELECT only) to re-run before applying. Rule chosen: a manifest frozen before the migration keeps the legacy review-ready semantics through a new `balance_rule` column (1 = legacy, 2 = new, default 2 for new rows); `cashbook_review_ready` has a verbatim legacy branch for rule 1. Recorded as D17 with the alternative and its change set. | requirements 3.10, 3.11; design F21, 4.1, D17, 21.1; migration 7a, 8, header; task T27 |
+| 5 | NIT | Addressed. Citations corrected to `CashbookForm.tsx` 158 and `cacheLoader.ts` 56-58. | requirements 1.2; design 21, 24 |
+| 6 | NIT | Addressed. R9.1 reads "next free version (5 at the time of writing)". | requirements 9.1 |
+
 ## 26. Responses to design review (specs-expense-burial-2026-11/review.json, revision 5)
 
 Findings 3, 4, 5, 8 and 9 belong to `burial-notice-and-trend` and are not answered here.
@@ -782,12 +860,97 @@ Findings 3, 4, 5, 8 and 9 belong to `burial-notice-and-trend` and are not answer
 | 6 | NIT | Addressed. `supabase/migrations/20261124095000_payment_type_cashbanked.sql` is authored (NOT APPLIED). Section 5 of the main migration is a pointer comment and its header says to apply the separate file first. T13 is now "review and test". D8 stays an open decision: if the user answers "inside", the statements move back. | design 4.1, D8; tasks T13; both migration files |
 | 7 | NIT | Addressed. D1 now reads "EFT and DirectDebit proofs stay governed by the setting (Burial proof is exempt under the burial-notice-and-trend spec)". | design D1 |
 
-## 25. Responses to design review (review.json, revision 4)
+## 27. Expense categories (configuration, scope, line columns, capture control)
 
-Findings 1, 2, 4 and 7-10 belong to `burial-notice-and-trend` and are not answered here.
+Owner: this spec (requirement 10). Reused from `burial-notice-and-trend` (Spec 2), not copied: the SQL helpers `scope_resolve_district`, `scope_assert_ho` and `scope_district_readable` (migration `20261124110000_scope_notice.sql`), the `admin-write` gate block and error mapper, `adminApi.invoke`, the HO `ScopePicker` and the offline-block pattern. This spec adds only what is category-specific.
 
-| # | Severity | Response | Where |
+### 27.1 Model
+
+A category list is a small ordered set of labels at one scope node (District or Apostleship). A congregation sees one list: the most specific scope that has a list (open decision D18 decides replace versus merge; build default REPLACE), else the built-in default. "Other" is built in, always last, never stored in the configuration. Each expense line stores the chosen label as a snapshot plus, for Other, a short description. Labels are plain text; there is no category id on the line, so renaming a configured category later does not rewrite history, and the server never has to join to a list at sync time (the offline device may be using a list the server has since replaced).
+
+Alternatives considered for the line reference: (a) a foreign key to the config row, rejected because lists are replaced wholesale (retire and insert), because an offline device can hold a retired row id, and because a FK would make an old line unsyncable; (b) a stable category code per label, rejected as extra configuration for no reader that needs it today (D21 defers reports). Chosen: label snapshot.
+
+### 27.2 Server (migration `20261124115000_expense_category.sql`, authored, NOT APPLIED)
+
+| Piece | Detail |
+|---|---|
+| Line columns | `expense_category text`, `expense_category_other text`, both NULL by default and on every non-Expenses row. |
+| CHECK | Either both NULL, or an Expenses row with a trimmed 1-40 character label free of control characters, and: label `Other` needs a trimmed 1-60 character description free of control characters; any other label needs the description NULL. `is not null` guards prevent a NULL in the expression from letting a bad row pass. |
+| Config table | `expense_category_config(id, scope_level in ('District','Apostleship'), scope_id, district_id, label, sort_order 1-8, is_active, retired_at, retired_by, created_by, created_at)`; label CHECKs (trimmed, 1-40, no control characters, not `other`); unique active `(scope, lower(label))` and `(scope, sort_order)`. |
+| RLS | SELECT only for `authenticated`, policy `is_active and public.scope_district_readable(district_id)`: every role, same rule as notices. No write grant. |
+| `expense_category_publish(p_actor, p_scope_level, p_scope_id, p_labels jsonb)` | `service_role` only. `scope_assert_ho(actor, null)` -> validate 1-8 string labels (trim, length, control characters, not `Other`, unique ignoring case) -> `scope_resolve_district(level, id, ['District','Apostleship'])` -> `scope_assert_ho(actor, district)` -> advisory lock on the scope -> retire the scope's active rows -> insert the new rows in order. One transaction. 22023 / 42501. |
+| `expense_category_clear(p_actor, p_scope_level, p_scope_id)` | Same checks, retires the scope's active rows; idempotent. |
+
+There is no date range, no overwrite prompt and no conflict result: the HO screen loads the current list and edits it, and publish replaces it atomically. History stays in the retired rows.
+
+### 27.3 The built-in default list (synthetic)
+
+```ts
+export const EXPENSE_CATEGORY_DEFAULTS = [
+  "Cleaning and hygiene",
+  "Maintenance and repairs",
+  "Utilities",
+  "Stationery and printing",
+  "Communion supplies",
+  "Transport",
+] as const;
+export const OTHER_CATEGORY = "Other";   // built in, always last, reserved
+```
+
+These are placeholders for the demo, not a decision about what the church actually uses; the HO replaces them through the configuration screen. A unit test asserts each default is a valid label under 10.2.
+
+### 27.4 Client
+
+- Dexie store `expenseCategories: "id, district_id, scope_id"` in the same additive version as `lineProofs` (4.3). Row: `{ id, scope_level, scope_id, district_id, label, sort_order }`.
+- `cacheLoader.ts`: add `supabase.from("expense_category_config").select("id, scope_level, scope_id, district_id, label, sort_order")` to the existing `Promise.allSettled` pass (Spec 2 adds the notice query to the same array); replace the store only when its own query succeeded; log one warning when the table is missing. Export `refreshExpenseCategories()` (one query, never throws), called when the Expenses tab mounts while online.
+- `src/lib/expenseCategories.ts` (pure, no React, Dexie or Supabase): `EXPENSE_CATEGORY_DEFAULTS`, `OTHER_CATEGORY`, `resolveCategoryList(rows, { apostleship_id, district_id }, mode = "replace")` returning labels in order, `categoryListView` (labels plus source note), `validateCategoryLabel`, `validateCategoryList`, `validateOtherDescription` (length, control characters, digit-run guard per D19).
+- `captureRepo.addLineItem` and `updateLineItem` accept `expense_category` and `expense_category_other`; both repo functions reject a missing category on a new expense (D20), an Other with no description, and a description with a non-Other category (the description is cleared on the client before the call). `MUTABLE_LINE_FIELDS` gains both fields. `syncLineItem` sends them only when `getServerCaps().expenseCategory` is true.
+- Editing category or description after cash is banked is allowed (R10.10): the freeze guard `assertCashExpenseEditable` is not called for a change that touches only these two fields.
+
+### 27.5 Capture control
+
+A required `<select>` below the source control, no default option, listing the resolved labels then "Other". Choosing "Other" shows a single-line input with `maxLength` 60 and the hint "Never enter passwords, PINs or account numbers."; choosing anything else hides and clears it. Validation runs through `expenseCaptureValidation` (section 18) and shows an inline error naming the field (`category` or `categoryOther`). The capture row and the Audit page show "Category" and, for Other, the description.
+
+### 27.6 Rules (single statement)
+
+| Rule | Client | Server |
+|---|---|---|
+| Label trimmed, 1-40, no control characters | `validateCategoryLabel` | CHECK + publish function |
+| 1-8 labels per list, unique ignoring case, not "Other" | `validateCategoryList` | publish function |
+| Other needs a description, 1-60, no control characters | `validateOtherDescription` | CHECK |
+| No 9-digit run in the description (D19) | `validateOtherDescription` | not enforced |
+| Label is in the list in force | `expenseCaptureValidation` | not enforced (offline) |
+| Scope is District or Apostleship, in the HO's districts | `ScopePicker` | `scope_resolve_district`, `scope_assert_ho` |
+
+### 27.7 Administration (reuse)
+
+`admin-write` gets two actions, `publish_expense_categories` and `clear_expense_categories`, in the same gate block as the notice actions. The entry validator is generalised by one dispatching function, `validateConfigRequest(payload)`, which calls the notice validator or `validateExpenseCategoryRequest` (added to the same self-contained module `supabase/functions/admin-write/scopeNotice.ts` and its byte-identical copy `src/lib/scopeNoticeRequest.ts`, so one copy test covers both and the SQLSTATE mapper is shared; the file name is historical). The gate order, the rpc call, the fixed error text per SQLSTATE and the rule "raw `error.message` never returned" are Spec 2's and are not repeated. Permission row `expense_categories.manage` (`HO: "M"`, every other role `-`). One screen `src/ho/ExpenseCategoriesScreen.tsx` at `/ho/expense-categories` (nav entry gated through `hasPermission`) with `ScopePicker` limited to District and Apostleship, an ordered editable list of 1-8 labels (add, remove, move up and down), Save and "Clear list", an inline error block with `role="alert"`, and the offline-unavailable block. All decisions come from the pure `src/ho/expenseCategoryForm.ts` (`validateCategoryForm`, `categoryEditorState`).
+
+### 27.8 Tests
+
+Listed in section 18 (category tests) and in the SQL file footer. Property P9 pins client and server format rules together.
+
+### 27.9 Rollout
+
+Client works before any SQL is applied: no config rows are read (query error logged once), the six defaults and "Other" show, categories are captured locally, and the sync row omits the category fields until the capability probe sees the columns. Apply order: `20261124095000`, `20261124100000`, `20261124110000` (Spec 2), then `20261124115000`, only after the SQL tests pass on a disposable stack and with explicit user authorisation. Nothing is applied by this spec.
+
+## 28. The Expenses notice and the absence of a Notes column
+
+The user first asked for "a small notes write-up" on expenses, then clarified that it should sit above the expense capture line, hold information about expenses, and follow exactly the process of the DHO-managed Burial notice. Design consequence: there is no per-line Notes field anywhere (requirement 11.1), and the notice is Spec 2's generalised notice with notice type `Expenses` (Spec 2 design 3.11 and requirement 11). This spec contributes only (a) the placement constraint on the Expenses tab (7.1) and (b) a task ordering dependency (the capture UI task runs after Spec 2's notice component exists). The existing required Description of an expense is unchanged and is the only free text on a line besides the category's Other description.
+
+## 29. Responses to the 2026-11-27 additions and the carried NITs (revision 6)
+
+Source of the NITs: `.agents/tasks/specs-expense-burial-2026-11/review.md` (APPROVED against the older scope, 5 NITs). NITs 4 and 5 concern Spec 2 and are answered there (Spec 2 design 19.5).
+
+| # | Item | Response | Where |
 |---|---|---|---|
-| 3 | MEDIUM | Addressed. Read-only aggregate query on the dev/demo backend: 14 periods, 7 with Expenses rows, 0 rows in `cashbook_submission_manifest`, so no period flips today (F21). The migration header now carries an id-level PRE-APPLY IMPACT CHECK (SELECT only) to re-run before applying. Rule chosen: a manifest frozen before the migration keeps the legacy review-ready semantics through a new `balance_rule` column (1 = legacy, 2 = new, default 2 for new rows); `cashbook_review_ready` has a verbatim legacy branch for rule 1. Recorded as D17 with the alternative and its change set. | requirements 3.10, 3.11; design F21, 4.1, D17, 21.1; migration 7a, 8, header; task T27 |
-| 5 | NIT | Addressed. Citations corrected to `CashbookForm.tsx` 158 and `cacheLoader.ts` 56-58. | requirements 1.2; design 21, 24 |
-| 6 | NIT | Addressed. R9.1 reads "next free version (5 at the time of writing)". | requirements 9.1 |
+| U1 | Exactly two sources; no bank-account or other option | Requirement 1.9 states the two-value rule and that no third source exists; 1.10 states Burial carries no officer. A grep of both specs and all authored SQL for a bank-account-style source found nothing to remove (recorded in the commit message). | requirements 1.9, 1.10, A9, A11 |
+| U2 | No per-line Notes; Expenses notice above the expense line | Requirement 11; design 28; the notice is Spec 2 requirement 11 and the generalised mechanism | requirements 11; design 7.1, 28 |
+| U3 | Expense categories as HO/DHO configuration with "Other" | Requirement 10; design 27; migration `20261124115000_expense_category.sql`; Dexie v5 gains `expenseCategories`; capture control; tests; reuse of Spec 2 helpers | requirements 10; design 4.1, 4.3, 12, 16-18, 27 |
+| U4 | Replace versus merge, and notice precedence, stay open | D18 (replace recommended, build default replace) answered together with Spec 2 O1 (unchanged, still open) | design 21, 21.1, Appendix C |
+| N1 | NIT: requirements status said "revision 3" while the design was 5 | Both documents now say revision 6 | requirements line 3; design line 3 |
+| N3 | NIT: response sections out of order (26 before 25) | Sections 23 to 26 are ascending with an index line | design section 23 |
+
+## 30. Index of response sections
+
+23 (review round 2), 24 (round 3), 25 (round 4), 26 (round 5), then 27 to 29 (revision 6). Ascending by number. Section 29 is the newest.

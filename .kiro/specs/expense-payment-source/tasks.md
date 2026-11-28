@@ -1,7 +1,7 @@
 # Implementation Plan: Expense Payment Source, Officer Pre-paid Expenses, Multi-proof and Balance Rule
 
-> DRAFT, revision 3. Do not start until the user approves `requirements.md` and `design.md` and answers the Open Decisions
-> (design.md section 21). No task here applies a migration to `cwdyixafvylzgtpsfmwr`, deploys, commits or pushes unless a
+> DRAFT, revision 6 (2026-11-27). Do not start until the user approves `requirements.md` and `design.md` and answers the Open Decisions
+> (design.md section 21; D1-D21). No task here applies a migration to `cwdyixafvylzgtpsfmwr`, deploys, commits or pushes unless a
 > task says so and the user has authorised it.
 >
 > Baselines to hold after every task (from `PROJECT-LOG.md`): `tsc --noEmit` 0 errors; vitest all passing (about 237 at
@@ -11,10 +11,12 @@
 > UI tasks are therefore verified by pure view-model helpers tested first (T17, and one aggregation function per review
 > screen), plus the manual UAT script in T28 for rendering only.
 
+> **Cross-spec order (revised 2026-11-27).** This spec now consumes `burial-notice-and-trend` (Spec 2): the Expenses notice (its notice type `Expenses`) and the shared SQL helpers, HO scope picker and `admin-write` gate block used by category administration. Order: T0-T14 here (pure logic, Dexie v5, repo, migration authoring, sync) -> Spec 2 T0-T8 and T7b (the notice mechanism, including the `Expenses` type, and the helpers) -> T15 onward here (UI, review views, T26b category administration needs Spec 2 T4, T5, T8) -> Spec 2 T9-T22. Whichever spec touches `src/db/schema.ts` second takes the next free Dexie version; each task reads `schema.ts` first.
+
 ## Phase 0: Gate
 
 - [ ] T0. Record decisions
-  - Get the user's answers to D1-D17 and write them into `design.md` section 21 (a "Decision" column). **D8 is answered first**: it decides whether T13 runs.
+  - Get the user's answers to D1-D21 (D18 is answered together with Spec 2 O1) and write them into `design.md` section 21 (a "Decision" column). **D8 is answered first**: it decides whether T13 runs.
   - Verification: every row has an answer; if an answer differs from the recommendation, the change set in section 21.1 has been applied to requirements, design and these tasks; D8, D16 and D17 are reflected in sections 4.1, 5.5 and 19 and in the migration file set.
 
 ## Phase 1: Pure logic and tests (no UI, no backend)
@@ -43,19 +45,23 @@
   - Add `src/capture/proofLabels.ts` with `proofFieldLabels(kind)`.
   - Verification: `proofLabels.test.ts`: expense returns "Invoice No."; eft, directDebit, burial, deposit return "Bank Ref".
 
-- [ ] T7. Capability flag logic (R9.2, R9.5)
-  - Add `src/utils/serverCaps.ts`: pure `nextServerCaps(previous, probeResult)` and `getServerCaps()` (reads `syncMeta['serverCaps']`, returns `{false,false}` when absent).
-  - Verification: `serverCaps.test.ts` has one case per branch: nothing stored gives false; success gives true; code `42703` gives false; code `PGRST204` gives false; network error, 401 and 500 keep the previous value (run with previous true and previous false); one capability failing leaves the other unchanged.
+- [ ] T5b. Category pure module and tests (R10.1, R10.2, R10.4, R10.5, R10.9; D18-D20)
+  - Add `src/lib/expenseCategories.ts` (`EXPENSE_CATEGORY_DEFAULTS`, `OTHER_CATEGORY`, `resolveCategoryList` with mode `replace` default and `merge`, `categoryListView`, `validateCategoryLabel`, `validateCategoryList`, `validateOtherDescription`) and `expenseCategories.test.ts`: Appendix C vectors CV1-CV8 under both modes, default labels valid and not "Other", list rules, Other description rules including the 9-digit guard and the control characters, property P9 (client rules equal the restated server CHECK).
+  - Verification: `vitest run src/lib/expenseCategories.test.ts` passes; the module imports nothing from React, Dexie or Supabase; a search of the new files for digit runs of 8 or more finds none.
+
+- [ ] T7. Capability flag logic (R9.2, R9.5, R9.6)
+  - Add `src/utils/serverCaps.ts`: pure `nextServerCaps(previous, probeResult)` and `getServerCaps()` (reads `syncMeta['serverCaps']`, returns all three flags false when absent; flags `expensePaymentSource`, `attachmentMeta`, `expenseCategory`).
+  - Verification: `serverCaps.test.ts` has one case per branch: nothing stored gives false; success gives true; code `42703` gives false; code `PGRST204` gives false; network error, 401 and 500 keep the previous value (run with previous true and previous false); one capability failing leaves the other two unchanged (three flags, R9.6); `expenseCategory` follows the same branches.
 
 ## Phase 2: Local data layer (Dexie, repository)
 
 - [ ] T8. Dexie v5 and types (R9.1)
-  - `src/db/schema.ts`: add `expense_payment_source?` to `LocalLineItem`, `depositNetAmount?` to `LocalPeriod`, `LocalLineProof`, the `lineProofs` table and `version(5).stores({ lineProofs: "localId, lineLocalId, periodLocalId" })`. No `.upgrade()`. Read `schema.ts` first: if another spec already took version 5, use the next number and update R9.1.
+  - `src/db/schema.ts`: add `expense_payment_source?`, `expense_category?` and `expense_category_other?` to `LocalLineItem`, `depositNetAmount?` to `LocalPeriod`, `LocalLineProof`, the `lineProofs` and `expenseCategories` tables and `version(5).stores({ lineProofs: "localId, lineLocalId, periodLocalId", expenseCategories: "id, district_id, scope_id" })` (one additive version, two stores). No `.upgrade()`. Read `schema.ts` first: if another spec already took version 5, use the next number and update R9.1.
   - Verification: new test seeds a v4 database (fake-indexeddb), opens v5, and all `lineItems`/`periods` rows are intact.
 
 - [ ] T9. Expense add/edit validation and freeze (R1.1-1.7, R4.7)
-  - Add pure `expenseCaptureValidation` (design section 18 helper table). `captureRepo.ts`: `addLineItem` accepts `expense_payment_source`; rejects missing source, prepaid without officer, cash with officer; `assertCashExpenseEditable` called from add, update and delete. Add `expense_payment_source` to `MUTABLE_LINE_FIELDS` in `syncEngine.ts`.
-  - Verification: `expenseCaptureValidation.test.ts` (every rejection with its field name); `captureRepo.expense.test.ts` covers each repo rejection and the `CASH_ALREADY_BANKED` case; pre-paid edit after banking still works; a pre-paid expense for an interim officer record (`is_interim: true`, `is_active: true`) is accepted by `expenseCaptureValidation`. T27 adds the server case: insert for a pending interim officer passes the guard, and for an `is_active = false` officer fails 23514.
+  - Add pure `expenseCaptureValidation` (design section 18 helper table). `captureRepo.ts`: `addLineItem` accepts `expense_payment_source`; rejects missing source, prepaid without officer, cash with officer; `assertCashExpenseEditable` called from add, update and delete. Add `expense_payment_source`, `expense_category` and `expense_category_other` to `MUTABLE_LINE_FIELDS` in `syncEngine.ts`. `addLineItem` and `updateLineItem` reject a missing category on a new expense (D20), an Other with no description, and a description with a non-Other category; a change touching only the two category fields is not blocked by `assertCashExpenseEditable` (R10.10). Read the current Burial capture bar and record whether it offers an officer picker (R1.10 holds either way; if it does, remove the picker).
+  - Verification: `expenseCaptureValidation.test.ts` (every rejection with its field name, including `category` and `categoryOther`); `captureRepo.expense.test.ts` covers each repo rejection and the `CASH_ALREADY_BANKED` case; pre-paid edit after banking still works; a pre-paid expense for an interim officer record (`is_interim: true`, `is_active: true`) is accepted by `expenseCaptureValidation`. T27 adds the server case: insert for a pending interim officer passes the guard, and for an `is_active = false` officer fails 23514.
 
 - [ ] T10. Multi-proof repo and delete cascade (R5.3, R5.7, R6.1)
   - `addExpenseProof`, `listLineProofs`, `countLineProofsByLine`, `removeUnsyncedLineProof`, `expenseProofSumMismatch`; `deleteLineItem` removes `lineProofs` rows in one transaction; `attachProof` delegates for Expense lines.
@@ -66,8 +72,8 @@
   - Verification: extend `captureRepo.banking.test.ts`: V1 deposits 310; V11 (bank, add cash 50, bank again) gives deposits 260 then 50 and `depositNetAmount` 310; V12 gives 130 then 30 and 160; stale amount returns `EXPENSES_CHANGED` and writes nothing; net 0 banks without a blob; V13 (combined AM+PM) stores AM 80 and PM 200 as each period's own net, and V14 returns the blocked result with nothing written; property P7 (one-step and two-step banking end with the same `depositNetAmount`).
 
 - [ ] T12. Threshold and capability probe (R7.1, R9.5)
-  - `cacheLoader.ts`: select `expense_approval_threshold`; `captureRepo.getExpenseThreshold`. Add the probe that feeds `nextServerCaps` (read-only `limit 0` selects, each in `Promise.allSettled`).
-  - Verification: `cacheLoader` test with a mocked client: threshold cached; probe success stores true; a schema-error probe stores false; a network-error probe leaves the stored value; a failing probe does not abort the reference refresh. Record in `PROJECT-LOG.md` that the PostgREST `limit 0` error shape remains UNVERIFIED until T27.
+  - `cacheLoader.ts`: select `expense_approval_threshold`; `captureRepo.getExpenseThreshold`. Add the probe that feeds `nextServerCaps` (read-only `limit 0` selects for the three capabilities, each in `Promise.allSettled`). Add the `expense_category_config` query to the same `allSettled` pass (replace the `expenseCategories` store only on success) and export `refreshExpenseCategories()` (never throws).
+  - Verification: `cacheLoader` test with a mocked client: threshold cached; probe success stores true; a schema-error probe stores false; a network-error probe leaves the stored value; a failing probe does not abort the reference refresh; the category query failing keeps the cached rows and a missing table logs one warning. Record in `PROJECT-LOG.md` that the PostgREST `limit 0` error shape remains UNVERIFIED until T27.
 
 ## Phase 3: Server migration authoring (no execution)
 
@@ -78,8 +84,8 @@
 ## Phase 4: Sync
 
 - [ ] T14. Sync engine (R5.8, R9.2-9.4, R4.3)
-  - `syncLineItem`: send `expense_payment_source` when `getServerCaps().expensePaymentSource` is true; add `syncLineProofs` (metadata columns only when `attachmentMeta` is true); `hasPendingProof` and final `stillPending` include `lineProofs`; `syncDepositSlip` sends `amount` = sum of `depositNetAmount` over every period the slip covers (null if any covered value is missing).
-  - Verification: `syncEngine.expense.test.ts` (mocked Supabase): row contains the source; omitted with caps false (including when no flag is stored); three proofs upload in createdAt order with distinct object keys; retry reuses keys; a period with a local proof is not marked synced; slip upsert has `amount`, after V11 the amount is the whole-period 310, and for V13 (AM 80, PM 200) the amount is 280.
+  - `syncLineItem`: send `expense_payment_source` when `getServerCaps().expensePaymentSource` is true, and `expense_category` and `expense_category_other` when `getServerCaps().expenseCategory` is true; add `syncLineProofs` (metadata columns only when `attachmentMeta` is true); `hasPendingProof` and final `stillPending` include `lineProofs`; `syncDepositSlip` sends `amount` = sum of `depositNetAmount` over every period the slip covers (null if any covered value is missing).
+  - Verification: `syncEngine.expense.test.ts` (mocked Supabase): row contains the source and the category fields; each omitted with its cap false (including when no flag is stored); three proofs upload in createdAt order with distinct object keys; retry reuses keys; a period with a local proof is not marked synced; slip upsert has `amount`, after V11 the amount is the whole-period 310, and for V13 (AM 80, PM 200) the amount is 280.
 
 ## Phase 5: UI
 
@@ -95,9 +101,9 @@
   - Add `deleteDialogText`, `bankingConfirmationModel`, `capturePanelModel`, `expenseProofState` (design section 18 table) with no React imports.
   - Verification: `captureViewModels.test.ts`: delete text for a cash expense with 0, 1 and 3 proofs and for a pre-paid expense (names the officer and amount); confirmation model for V1, V4 (zero deposit), V11 step 2 (later banking text), `C > T` (blocked with the R3.7 message); panel model returns `balanced`, `awaiting`, `notBalanced` and `cashShortfall` for V7, V6, V3, V5; `expenseProofState` rule is independent of `proof_mandatory`.
 
-- [ ] T18. Capture UI: source control, officer picker, Officers tab action (R1.1-1.6, R2.4)
-  - `CashbookForm.tsx` Expenses bar uses `expenseCaptureValidation`; Officers tab "Record pre-paid expense" button and derived read-only rows (from `officerTithingByOfficer`); option gated by `getServerCaps()`.
-  - Verification: typecheck and lint baselines hold; the validation and tithing helpers already pass (T4, T9); manual UAT T28 steps 1-4 (rendering only).
+- [ ] T18. Capture UI: source control, category control, officer picker, Officers tab action (R1.1-1.6, R2.4, R10.1, R10.9, R11; depends on Spec 2 T7)
+  - `CashbookForm.tsx` Expenses bar uses `expenseCaptureValidation`; add the required category `<select>` and the Other description input (design 27.5) fed by `resolveCategoryList` over the cached rows and the congregation's `apostleship_id` and `district_id`; call `refreshExpenseCategories()` on Expenses tab mount while online; no Notes input; leave the notice slot between the tab row and the capture bar free (Spec 2 T7 renders the Expenses notice there); Officers tab "Record pre-paid expense" button and derived read-only rows (from `officerTithingByOfficer`); option gated by `getServerCaps()`.
+  - Verification: typecheck and lint baselines hold; the validation and tithing helpers already pass (T4, T9); manual UAT T28 steps 1-4 and 18-20 (rendering only); a grep shows no `notes` input in the Expenses bar and no notice code added by this task.
 
 - [ ] T19. Proof list, forced proof, warnings (R5.1, R5.2, R5.6, R5.7)
   - Expense rows list proofs, "+ Add proof", "Proof required" marker via `expenseProofState`, auto-open modal after add, `missingProofs` independent of `proofMandatory`, R5.6 warning via `expenseProofSumMismatch`.
@@ -110,7 +116,7 @@
 ## Phase 6: Review views (one screen per task; the pure aggregation function and its test come first in each)
 
 - [ ] T21. Audit page (R8.1, R8.2, R8.4, R5.6)
-  - Add `auditExpenseRows` and `auditTotals` (pure); then edit `AuditReviewPage.tsx`: select the new field, filter attachments by this period's line ids, badge, officer, all proofs, "Grand Total" = income minus cash expenses, separate pre-paid line.
+  - Add `auditExpenseRows` and `auditTotals` (pure); then edit `AuditReviewPage.tsx`: select the new field, filter attachments by this period's line ids, badge, officer, category and Other description, all proofs, "Grand Total" = income minus cash expenses, separate pre-paid line.
   - Verification: unit tests on V1, V2, V8 (totals; V2 returns `tithingRecorded` 820 and `fundsKept` 700) and a 3-proof expense (rows and mismatch warning); typecheck; grep shows no remaining subtraction of total expenses in the file; UAT step 13.
 
 - [ ] T22. Chairperson dashboard (R2.5, R8.2, R8.3)
@@ -133,10 +139,16 @@
   - Add `secretaryTotals` (pure, returns totals only: cash expenses, pre-paid, income, no officer or line detail); edit `SecretaryReview.tsx` line 136 select.
   - Verification: unit test asserts the returned object has no `officer`, `lines` or `proof` keys; typecheck; UAT step 15.
 
+- [ ] T26b. Category administration (R10.6, R10.7, R10.13; depends on Spec 2 T4, T5, T8)
+  - Review the authored `supabase/migrations/20261124115000_expense_category.sql` (NOT APPLIED header; line columns and CHECK; config table; read policy through `scope_district_readable`; `expense_category_publish`; `expense_category_clear`) against design 27.2 and fix drift; it must call, not copy, the Spec 2 helpers.
+  - Add `validateExpenseCategoryRequest` to the self-contained module `supabase/functions/admin-write/scopeNotice.ts` and its byte-identical copy `src/lib/scopeNoticeRequest.ts` behind the existing `validateConfigRequest`; add the two actions to the existing gate block in `index.ts` (one added condition, no gate change); add `adminApi.publishExpenseCategories` and `adminApi.clearExpenseCategories`; add permission row `expense_categories.manage` (`HO: "M"`, all others `-`); add `src/ho/expenseCategoryForm.ts` and `src/ho/ExpenseCategoriesScreen.tsx` using the shared `ScopePicker`, route `/ho/expense-categories`, nav entry gated by `hasPermission`.
+  - Author `supabase/tests/expense_category.test.sql` covering the cases at the foot of the migration.
+  - Verification: tests for the request validator (every rule, SQLSTATE mapping unchanged, copy test still byte-identical), `validateCategoryForm`, and the permission row (HO `M`, all others `-`); `git diff supabase/functions/admin-write/index.ts` shows only the added action names; a grep shows no role string comparison and no duplicate of the gate logic; SQL test authored, run in T27 or recorded "authored, not run". No deploy, nothing applied.
+
 ## Phase 7: Server verification (executed only on a disposable stack)
 
 - [ ] T27. SQL tests and disposable-stack run
-  - Write `supabase/tests/expense_payment_source.test.sql` with the cases in design.md section 18 (including Appendix A vectors V1-V14 against `cashbook_period_balance`, and the slip amount after a second banking). Confirm the PostgREST error shape for a `limit 0` select of a missing column and adjust `nextServerCaps` codes if needed. Add the D17 cases: a manifest with `balance_rule = 1`, `balanced = true`, on a period with a cash expense and no banked cash is review-ready (legacy path); the same period re-submitted gets `balance_rule = 2` and is not review-ready; the pre-apply impact check (migration header) runs and its result is recorded.
+  - Write `supabase/tests/expense_payment_source.test.sql` with the cases in design.md section 18 (including Appendix A vectors V1-V14 against `cashbook_period_balance`, and the slip amount after a second banking). Confirm the PostgREST error shape for a `limit 0` select of a missing column and adjust `nextServerCaps` codes if needed. Include the category cases (T26b) and the shared-helper cases of Spec 2 `scope_notice_rls.test.sql`, run against the stack with `20261124110000` applied before `20261124115000`. Add the D17 cases: a manifest with `balance_rule = 1`, `balanced = true`, on a period with a cash expense and no banked cash is review-ready (legacy path); the same period re-submitted gets `balance_rule = 2` and is not review-ready; the pre-apply impact check (migration header) runs and its result is recorded.
   - Run the migration header's PRE-APPLY IMPACT CHECK (SELECT only) against the target before applying; record the count of rows with `stored_balanced = true` and `new_rule_balanced = false` (0 expected; 0 manifests existed on 2026-11-24).
   - Verification: the user names the disposable target; on it the migration(s) apply cleanly in order (T13 file first when it exists) and every assertion passes, including the existing `two_person_signoff_rls.test.sql` and `tranche4_proof_rls.test.sql`. Record the result in `PROJECT-LOG.md`. Without a named target this task stays open and nothing is executed.
 
@@ -160,13 +172,17 @@
   15. Chairperson and Elder tithing review show paid-in, pre-paid and total for the officer.
   16. Secretary sees totals only.
   17. Total expenses above the threshold require the Elder comment; the pre-paid share is shown.
+  18. Add an expense without a category. Expect a blocking inline error naming the category field. With no list configured, the picker shows the six standard categories then "Other".
+  19. Choose "Other": a description is required (empty blocked; a 9-digit number blocked with the message); choosing another category hides and clears it. The expense row shows the category and the description.
+  20. As HO, set a list of five labels at the District, then a different list at an Apostleship: a congregation under that apostleship sees the Apostleship list (replace, until D18 is answered) and one under another apostleship sees the District list. Go offline and confirm the same lists show.
+  21. The Expenses tab shows the Expenses notice (or the Standard notice) above the capture line, with no Notes field on any expense line; a Burial line shows no officer and no payment source.
   - Verification: user signs off each step; failures become bugfix specs, not silent edits.
 
 - [ ] T29. Update steering and the project log
-  - After T28 passes: update `tech_old.md`/`steering_old.md` (balance rule, new column, new store, second-banking rule) and `PROJECT-LOG.md` CURRENT STATE and journal.
+  - After T28 passes: update `tech_old.md`/`steering_old.md` (balance rule, new columns, new stores, second-banking rule, expense categories and the shared HO configuration path) and `PROJECT-LOG.md` CURRENT STATE and journal.
   - Verification: steering describes only landed and verified behaviour.
 
 ## Dependency order
 
-T0 -> T1 -> T2 -> T3, T4, T5, T6, T7 (parallel) -> T8 -> T9 -> T10 -> T11 -> T12 -> T13 (if D8 = separate; may run any time after T0) -> T14 -> T15 -> T16 -> T17 -> T18 -> T19 -> T20 -> T21 -> T22 -> T23 -> T24 -> T25 -> T26 -> T27 -> T28 -> T29.
+T0 -> T1 -> T2 -> T3, T4, T5, T6, T7 (parallel) -> T8 -> T9 -> T10 -> T11 -> T12 -> T13 (if D8 = separate; may run any time after T0) -> T14 -> T15 -> T16 -> T17 -> T18 -> T19 -> T20 -> T21 -> T22 -> T23 -> T24 -> T25 -> T26 -> T26b -> T27 -> T28 -> T29. T5b may run any time after T0 (parallel with T3-T7). T18 needs Spec 2 T7 (the notice slot) and T26b needs Spec 2 T4, T5, T8 (see the cross-spec order at the top).
 T24, T25 need T15. T27 can start after T2 (it only needs the vectors) and must finish before the client is pushed with caps enabled.

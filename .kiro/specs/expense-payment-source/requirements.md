@@ -1,7 +1,7 @@
 # Requirements Document: Expense Payment Source, Officer Pre-paid Expenses, Multi-proof and Balance Rule
 
-Spec 1 of the expense/burial track. Status: DRAFT for user approval, 2026-11-24 (revision 3: second review findings addressed).
-Branch `feat/treasurer-dashboard-v1`. Documentation only: no code, no migration applied, no backend write.
+Spec 1 of the expense/burial track. Status: DRAFT for user approval, revision 6, 2026-11-27 (revision 3 on 2026-11-24 answered the second review; this revision adds the user's additions of 2026-11-27: exactly two expense sources, no per-line Notes, the Expenses notice, and configurable expense categories with an "Other" description; it matches `design.md` revision 6).
+Branch `feat/treasurer-dashboard-v1`. Documentation only: no code, no migration applied, no backend write. Document changes are committed locally and not pushed.
 Fact base: `.agents/tasks/uat-treasurer-findings-2026-11-23.md` (sections 5, 7, 8, 9, 10, 11) and the code and
 read-only schema checks cited in `design.md`. Anything not verified is marked **[UNVERIFIED]**.
 
@@ -16,6 +16,11 @@ reference to "Invoice No.", and carries the new rule through the client, the syn
 functions, the deposit slip and the review views.
 
 ## Glossary
+
+- **Expense category**: the label that says what an expense was for (for example "Maintenance and repairs"). A congregation picks one from the list in force for it. The list always ends with the built-in **Other**.
+- **Category list**: 1 to 8 named categories configured by the HO at one District or one Apostleship, or, when none is configured, the built-in default list of six synthetic categories.
+- **Other**: the built-in last category. Choosing it requires a short description (`expense_category_other`).
+- **Expenses notice**: a dated message of notice type `Expenses`, managed by the HO and shown above the expense capture line. Defined in `burial-notice-and-trend` requirement 11; this spec only consumes it.
 
 - **Cash expense**: an expense with source `CongregationCash` (paid from the congregation's cash collections).
 - **Pre-paid expense**: an expense with source `OfficerPrepaid` (an officer bought the goods with his own
@@ -46,6 +51,9 @@ A criterion tagged `[Dn]` depends on open decision Dn in `design.md` section 21.
 - A6. Cash expenses can be paid only from tithe cash collected in the same period (Open Decision D2, recommended).
 - A7. The governance threshold (R500 default) applies to the total of all expenses of both sources (Open Decision D4, recommended).
 - A8. Officer-fund supplements (the District Head Office reimbursing an officer) are out of scope.
+- A9. Exactly two expense sources exist (user, 2026-11-27). There is no third source and no per-line free-text Notes column; the Expenses notice (Spec 2) replaces the notes idea.
+- A10. The category list is configuration managed by the HO at District or Apostleship level, not a code constant; the built-in default and "Other" are the only code constants.
+- A11. A Burial payment is made by an officer or a member and is recorded the same way; no officer is attached to a Burial line (the pre-paid officer link exists only on Expenses lines).
 
 ## Requirements
 
@@ -63,6 +71,9 @@ A criterion tagged `[Dn]` depends on open decision Dn in `design.md` section 21.
 1.6 An expense whose source or officer is missing or invalid shall not be saved, and the user shall see an inline error naming the missing field.
 1.7 Existing local and server expense lines with no source shall be treated as `CongregationCash`.
 1.8 The server shall reject a pre-paid expense that has no officer, a cash expense that has an officer, and a pre-paid officer who is not an active officer of the period's congregation.
+
+1.9 Exactly two sources exist: "Paid from congregation cash" and "Pre-paid by officer". The CHECK constraint, the client validation, the sync row and the Appendix vectors allow exactly these two values. No third source, option, field or label is offered, stored or accepted, and the app never records how an officer paid for the goods (A1, 2.7).
+1.10 Burial lines carry no payment source and no officer. The Burial capture bar offers no officer picker, and a Burial payment made by an officer is recorded exactly as one made by a member (the app does not distinguish the payer). The pre-paid officer link (`officer_id` with source `OfficerPrepaid`) exists only on Expenses lines; the guard trigger already forces the source to NULL on every non-Expenses row (migration section 2). Whether the current Burial bar offers an officer picker is [UNVERIFIED]; task T9 reads it and the requirement holds either way.
 
 ### Requirement 2: Officer total tithing includes the pre-paid value, without a second record
 
@@ -175,12 +186,44 @@ A criterion tagged `[Dn]` depends on open decision Dn in `design.md` section 21.
 9.3 Old clients that do not send the new field shall still be able to write expenses; the server shall default them to `CongregationCash`.
 9.4 The sync engine shall retain and retry a line or proof that fails, as it does today, and shall never mark a period synced while a proof is still local.
 9.5 The capability flag shall default to "not available" when it has never been stored. Only a schema error (undefined column) shall set it to "not available" after it was available; any other probe failure (network, authentication, server error) shall leave the previous value unchanged. A successful probe shall set it to "available".
+9.6 The capability flags are `expensePaymentSource`, `attachmentMeta` and `expenseCategory` (probe: `select expense_category from cashbook_line_item limit 0`). Each is probed and stored independently under the rules of 9.5. When `expenseCategory` is false the category and Other fields are omitted from the sync row and the category list is still captured and shown, so a cash expense on an un-migrated backend syncs exactly as today.
+
+
+### Requirement 10: Expense categories (HO-managed configuration and a category on every expense)
+
+**User Story:** As a DHO, I set the short list of expense categories for my district or apostleship so spending is described the same way everywhere. As a Treasurer, I pick a category for each expense and, when none fits, choose Other and say in a few words what it was.
+
+#### Acceptance Criteria
+
+10.1 [D20] Every new expense shall require exactly one category, chosen from the list in force for its congregation (10.4), with no pre-selected value. The list always ends with the built-in "Other". An expense with no category shall not be saved and the user shall see an inline error naming the field. An existing line with no category (captured before this feature) is shown as "Uncategorised"; it is not blocked, and it is not retro-fitted.
+10.2 A configured category list shall hold 1 to 8 named categories (about 6 are expected). Each label shall be trimmed (the trim set is space, tab, carriage return and line feed), 1 to 40 characters, free of control characters, unique ignoring case within the list, and shall not equal "Other" ignoring case. The built-in "Other" is never stored in the configuration and cannot be renamed, moved or removed.
+10.3 A list belongs to exactly one scope node: a District or an Apostleship. An Overseership or Congregation scope, a node that does not exist, a node whose level differs from the chosen level, and a node whose parent chain breaks the fixed shape (Apostleship under District) shall be rejected with 400 and write nothing. A node outside the caller's assigned districts shall be rejected with 403 and write nothing.
+10.4 [D18] Scope resolution is consistent with the notice scope rule: it uses the congregation's own `apostleship_id` and `district_id` (already cached by `cacheLoader`) and works offline. Until Open Decision D18 is answered, the build default is REPLACE: the Apostleship list applies when one exists; otherwise the District list applies; otherwise the built-in default list applies. The alternative (MERGE the broader list with the more specific one) is listed in `design.md` section 21 with a change set. The notice precedence rule (`burial-notice-and-trend` O1) stays open and is to be answered together with D18.
+10.5 When no list is configured for the congregation's Apostleship or District, the built-in default list of six synthetic categories shall show (constant `EXPENSE_CATEGORY_DEFAULTS`, design 27.3), followed by "Other". It works offline and with an empty cache.
+10.6 Writes shall be possible only for an HO acting inside the districts assigned to that HO (`ho_district_assignments`), only through the `admin-write` Edge Function, in the order of the Privileged Route Checklist: service-role key present (500), Bearer token (401), `auth.getUser` (401), active in-window `user_hierarchy_access` role `HO` (403), validate body (400), write with the service-role client. The write shall run in one `service_role`-only SQL function (`expense_category_publish`, `expense_category_clear`) that re-checks the caller from the user id, so a gap in the Edge gate cannot widen access. The browser shall hold no INSERT, UPDATE or DELETE privilege or policy on the configuration table.
+10.7 Every authenticated user, whatever the role, shall be able to SELECT the active category rows of their own district (the same read function as notices, no role term). The rows shall be cached offline in a new Dexie store `expenseCategories` (part of the same additive Dexie version as `lineProofs`), refreshed in the same `Promise.allSettled` pass as the other reference caches and again when the Expenses tab mounts while online. A failed refresh keeps the cached rows. If the table does not exist on the backend yet, the app logs one warning and the built-in default list shows.
+10.8 Each expense line shall store its category as `expense_category` (the chosen label, a snapshot) and, only when the category is "Other", `expense_category_other`. A later edit or retirement of a list shall never change a stored line. The server shall validate the format (trimmed, length, no control characters, Other-needs-description, description-only-with-Other, Expenses rows only) and shall NOT require the label to be in the current list, because an offline device may capture against a list that has since been replaced.
+10.9 [D19] When "Other" is chosen, a description shall be required: plain text, trimmed, 1 to 60 characters, no control characters, and (D19) no run of 9 or more consecutive digits, which looks like an account or identity number, with the message "Describe the purchase in words. Do not enter account or ID numbers." The input shall carry the hint "Never enter passwords, PINs or account numbers." When any other category is chosen the description shall be empty and shall not be stored. The description shall never be written to a log (N3).
+10.10 The category and the Other description shall remain editable until the period is submitted, with no effect on any money figure. They are not covered by the cash-banked freeze (4.7). Changing the category never changes the source, the officer, the amount, the balance or the proofs.
+10.11 Sync: both fields shall be in the sync engine's mutable line fields and shall be sent only when the server capability `expenseCategory` is true (9.5, 9.6); otherwise they are omitted and the line still syncs. A line captured offline against a list that has since changed keeps its label and syncs.
+10.12 The capture row and the Audit page expense panel shall show each expense's category and, for Other, its description. The Secretary (totals-only `T`) shall see no category detail (steering invariant 7). Category subtotals on any screen are out of scope (D21).
+10.13 Category administration shall reuse the machinery of `burial-notice-and-trend` and shall not duplicate it: the shared SQL helpers (`scope_resolve_district`, `scope_assert_ho`, `scope_district_readable`), the `adminApi.invoke` wrapper, the shared HO `ScopePicker` and the offline block pattern. One HO screen (`/ho/expense-categories`, permission row `expense_categories.manage`, `HO: "M"` and `-` for every other role, gated through `permissions.ts`) shows the list in force at the chosen scope (or "No list set: standard categories apply" with the six standard names offered as a starting point), lets the HO edit 1 to 8 labels in order, save, and clear the list. It is unavailable offline (explicit message, no data).
+
+### Requirement 11: No per-line Notes; the Expenses notice
+
+**User Story:** As a DHO, I publish guidance about expenses once, above the expense capture line, instead of every Treasurer typing notes on every line.
+
+#### Acceptance Criteria
+
+11.1 There shall be no per-line free-text Notes column, field or input on expenses in the client, in Dexie or on the server. The existing required expense Description is unchanged and is not a notes field.
+11.2 The Expenses tab shall show the Expenses notice above the expense capture line. Its behaviour (scope District, Apostleship or Overseership; start and expiry dates; overwrite prompt; built-in synthetic default text; offline cache; `admin-write` path; every role reads, Secretary included) is defined entirely by `burial-notice-and-trend` requirement 11 and its generalised notice mechanism (one table, one notice type key, one edit screen). This spec adds no notice table, screen, action, component or default text of its own.
+11.3 The only Spec 1 work for the notice is the placement dependency: the expense capture UI task (T18) is built after the notice component exists and keeps its slot above the capture bar free.
 
 ## Non-Functional Requirements
 
 N1. All balance arithmetic shall be at cent precision (round half up on cents).
 N2. The client rule and the server rule shall agree on a shared set of golden test vectors (design.md Appendix A).
-N3. No secret, real account number or personal document shall be written to code, specs or logs.
+N3. No secret, real account number or personal document shall be written to code, specs or logs. The Other description and the category labels are never logged.
 N4. New code shall follow the existing `permissions.ts` gate. No role string comparisons in components.
 N5. Migration shall be authored but not applied. It shall first run on a disposable stack together with the RLS and integrity tests.
 N6. The change shall not widen any RLS policy and shall not add a client-callable SECURITY DEFINER function that returns data across congregations.
@@ -195,4 +238,7 @@ N6. The change shall not widen any RLS policy and shall not add a client-callabl
 - Fixing the per-period versus per-month naming of the R500 check.
 - Multi-proof for EFT, DirectDebit, Burial and the deposit slip.
 - Recording how an officer paid for the goods.
+- A third expense source and a per-line Notes field (requirements 1.9, 11.1).
+- Category subtotals, charts or category reports on any screen (D21), and a category check against the current list on the server (10.8).
+- Congregation-level or Overseership-level category lists.
 - Server enforcement of the Elder comment (Open Decision D4b).
